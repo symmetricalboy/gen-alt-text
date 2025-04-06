@@ -186,17 +186,35 @@ export default defineContentScript({
     const findMediaElement = (container) => {
       console.log('Searching for media in container:', container);
 
-      // --- PRIORITY 1: Check for local file preview (Data URL) ---
-      const dataUrlImage = container.querySelector('img[src^="data:image/"]');
-      if (dataUrlImage) {
-        console.log('Found image via data URL (local file preview):', dataUrlImage);
-        const rect = dataUrlImage.getBoundingClientRect();
-        // Basic sanity check for visibility/size
-        if (rect.width > 30 && rect.height > 30 && dataUrlImage.offsetParent !== null) {
-           return dataUrlImage;
+      // --- PRIORITY 1: Check for specific local file preview (Data URL within preview container) ---
+      const specificDataUrlImage = container.querySelector('[data-testid="imagePreview"] img[src^="data:image/"], [data-testid="images"] img[src^="data:image/"]');
+      if (specificDataUrlImage) {
+        console.log('Found image via SPECIFIC data URL selector:', specificDataUrlImage);
+        const rect = specificDataUrlImage.getBoundingClientRect();
+        // Lowered threshold slightly for previews, check visibility
+        if (rect.width > 10 && rect.height > 10 && specificDataUrlImage.offsetParent !== null) {
+           console.log('Specific data URL image is valid, returning it.');
+           return specificDataUrlImage;
         } else {
-           console.warn('Data URL image found but seems hidden or too small, continuing search...');
+           console.warn('Specific data URL image found but seems hidden/too small. Rect:', rect, 'OffsetParent:', specificDataUrlImage.offsetParent);
         }
+      } else {
+         console.log('Did not find image via SPECIFIC data URL selector (e.g., [data-testid="imagePreview"] img[src^="data:image/"]).');
+      }
+
+      // --- PRIORITY 2: Check for ANY local file preview (Data URL) - Wider check as fallback ---
+      const anyDataUrlImage = container.querySelector('img[src^="data:image/"]');
+       if (anyDataUrlImage) {
+        console.log('Found image via ANY data URL selector:', anyDataUrlImage);
+        const rect = anyDataUrlImage.getBoundingClientRect();
+        if (rect.width > 10 && rect.height > 10 && anyDataUrlImage.offsetParent !== null) {
+           console.log('ANY data URL image is valid, returning it.');
+           return anyDataUrlImage;
+        } else {
+           console.warn('ANY data URL image found but seems hidden/too small. Rect:', rect, 'OffsetParent:', anyDataUrlImage.offsetParent);
+        }
+      } else {
+         console.log('Did not find image via ANY data URL selector.');
       }
 
       // --- Fallback to existing scoring logic if no data URL image found ---
@@ -309,7 +327,8 @@ export default defineContentScript({
         console.log('Final selected best candidate (from scoring):', bestCandidate);
       } else {
          console.error('Failed to find a suitable media candidate within the container after scoring (Highest score <= 0).');
-         console.error('Failed to find suitable media via scoring.');
+         // Added more specific error for scoring failure
+         console.error('SCORING FAILED: No suitable media candidate found via scoring logic.');
       }
 
       return bestCandidate; // Return the highest scoring candidate or null
@@ -547,41 +566,47 @@ export default defineContentScript({
     
     // Helper function to find the composer container from a textarea or any element within it
     function findComposerContainer(element) {
-      console.log('Finding composer container for element:', element);
+      console.log('[findComposerContainer] Starting search for element:', element);
 
       // Priority 1: Find the closest modal dialog containing the element
       const modalDialog = element.closest('[role="dialog"][aria-modal="true"]');
       if (modalDialog) {
-        console.log('Found modal dialog container:', modalDialog);
+        console.log('[findComposerContainer] Found potential modal dialog:', modalDialog);
         // Check if it seems valid (contains the element AND either image preview OR post button)
         if (modalDialog.contains(element) &&
             (modalDialog.querySelector('[data-testid="imagePreview"], [data-testid="images"]') ||
              modalDialog.querySelector('button[aria-label*="Post"], button[type="submit"]'))) {
-           console.log('Modal dialog seems valid (contains element + preview/post button), returning it.');
+           console.log('[findComposerContainer] Returning: Priority 1 - Valid Modal Dialog');
            return modalDialog;
         } else {
-           console.warn('Modal dialog found, but structure seems unexpected. Continuing search...');
+           console.warn('[findComposerContainer] Modal dialog found, but validation failed. Continuing search...');
            // Don't return modalDialog yet if it doesn't seem right
         }
+      } else {
+          console.log('[findComposerContainer] Priority 1: No modal dialog found.');
       }
 
       // Priority 2: Look for a data-testid="composer" ancestor
       const testIdComposer = element.closest('[data-testid="composer"]');
       if (testIdComposer) {
-        console.log('Found container via data-testid="composer":', testIdComposer);
+        console.log('[findComposerContainer] Found potential data-testid="composer":', testIdComposer);
         // Check if it seems valid (contains the element AND either image preview OR post button)
         if (testIdComposer.contains(element) &&
             (testIdComposer.querySelector('[data-testid="imagePreview"], [data-testid="images"]') ||
              testIdComposer.querySelector('button[aria-label*="Post"], button[type="submit"]'))) {
-           console.log('Composer with test ID seems valid.');
+           console.log('[findComposerContainer] Returning: Priority 2 - Valid Test ID Composer');
            return testIdComposer;
+        } else {
+           console.warn('[findComposerContainer] Test ID composer found, but validation failed. Continuing search...');
         }
-         console.warn('Found data-testid="composer", but structure seems unexpected. Continuing search...');
+      } else {
+           console.log('[findComposerContainer] Priority 2: No data-testid="composer" found.');
       }
+
 
       // Priority 3: Strict Fallback - Walk up looking for the *lowest* common ancestor
       // containing the original element, a reliable image preview indicator, AND action buttons.
-      console.log('Modal or testid composer not found directly. Walking up DOM for strict common ancestor...');
+      console.log('[findComposerContainer] Entering Priority 3: Strict Lowest Common Ancestor search...');
       let current = element.parentElement;
       let maxDepth = 10;
       let commonAncestor = null;
@@ -594,7 +619,7 @@ export default defineContentScript({
               current.querySelector(imagePreviewSelector) &&
               current.querySelector(actionButtonSelector)) {
 
-              console.log('Found potential common ancestor with element, preview, and buttons:', current);
+              console.log('[findComposerContainer] Found potential common ancestor:', current);
               commonAncestor = current; // Store this level as a potential candidate
 
               // Check if the *parent* also contains all three. If not, this 'current' is the lowest common ancestor.
@@ -604,7 +629,7 @@ export default defineContentScript({
                   !parent.querySelector(imagePreviewSelector) ||
                   !parent.querySelector(actionButtonSelector)) {
 
-                 console.log('Parent does not contain all three, selecting current as lowest common ancestor:', commonAncestor);
+                 console.log('[findComposerContainer] Parent validation failed, selecting current as lowest common ancestor:', commonAncestor);
                  break; // Found the boundary
               }
               // If parent also contains all, continue up to find the *actual* lowest
@@ -614,14 +639,16 @@ export default defineContentScript({
       }
 
       if (commonAncestor) {
-          console.log('Returning lowest common ancestor found:', commonAncestor);
+          console.log('[findComposerContainer] Returning: Priority 3 - Lowest Common Ancestor');
           return commonAncestor;
+      } else {
+          console.log('[findComposerContainer] Priority 3: No suitable common ancestor found.');
       }
 
-      // Last Resort: If absolutely nothing worked, use the modal if found initially, otherwise a simple parent
-      console.error('Could not find a reliable common ancestor. Using initial modal or fallback parent.');
-      // Return modalDialog only if it was found initially, otherwise fallback
-      return modalDialog || element.parentElement?.parentElement || element.parentElement;
+      // Last Resort:
+      const fallback = modalDialog || testIdComposer || element.parentElement?.parentElement || element.parentElement; // Try modal/testid again before simple parent
+      console.error('[findComposerContainer] Returning: Last Resort Fallback:', fallback);
+      return fallback;
     }
     
     // Watch for media uploads to trigger auto-generation
