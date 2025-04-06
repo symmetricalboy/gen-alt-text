@@ -1,5 +1,5 @@
 # Build directories and outputs
-.output
+# .output
 .wxt
 dist
 temp
