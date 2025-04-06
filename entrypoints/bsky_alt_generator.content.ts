@@ -25,15 +25,75 @@ export default defineContentScript({
       showToasts: true
     };
     
+    // Helper function to safely access chrome APIs
+    const safeChrome = {
+      storage: {
+        sync: {
+          get: (keys, callback) => {
+            try {
+              if (chrome?.storage?.sync) {
+                chrome.storage.sync.get(keys, callback);
+              } else {
+                console.warn('Chrome storage API not available, using default values');
+                callback({});
+              }
+            } catch (error) {
+              console.error('Error accessing chrome.storage.sync.get:', error);
+              callback({});
+            }
+          },
+          set: (items) => {
+            try {
+              if (chrome?.storage?.sync) {
+                chrome.storage.sync.set(items);
+              } else {
+                console.warn('Chrome storage API not available, cannot save settings');
+              }
+            } catch (error) {
+              console.error('Error accessing chrome.storage.sync.set:', error);
+            }
+          }
+        }
+      },
+      runtime: {
+        connect: (options) => {
+          try {
+            if (chrome?.runtime?.connect) {
+              return chrome.runtime.connect(options);
+            } else {
+              console.error('Chrome runtime API not available');
+              throw new Error('Chrome runtime API not available');
+            }
+          } catch (error) {
+            console.error('Error connecting to background script:', error);
+            throw error;
+          }
+        },
+        onChanged: {
+          addListener: (callback) => {
+            try {
+              if (chrome?.storage?.onChanged) {
+                chrome.storage.onChanged.addListener(callback);
+              } else {
+                console.warn('Chrome storage.onChanged API not available');
+              }
+            } catch (error) {
+              console.error('Error adding onChanged listener:', error);
+            }
+          }
+        }
+      }
+    };
+    
     // Try to load config from storage
-    chrome.storage.sync.get(['autoMode', 'showToasts'], (result) => {
+    safeChrome.storage.sync.get(['autoMode', 'showToasts'], (result) => {
       if (result.autoMode !== undefined) config.autoMode = result.autoMode;
       if (result.showToasts !== undefined) config.showToasts = result.showToasts;
       console.log('Loaded config:', config);
     });
     
     // Listen for config changes
-    chrome.storage.onChanged.addListener((changes) => {
+    safeChrome.runtime.onChanged.addListener((changes) => {
       if (changes.autoMode) config.autoMode = changes.autoMode.newValue;
       if (changes.showToasts) config.showToasts = changes.showToasts.newValue;
       console.log('Updated config:', config);
@@ -227,7 +287,7 @@ export default defineContentScript({
       checkbox.checked = config.autoMode;
       checkbox.addEventListener('change', (e) => {
         config.autoMode = e.target.checked;
-        chrome.storage.sync.set({ autoMode: config.autoMode });
+        safeChrome.storage.sync.set({ autoMode: config.autoMode });
       });
       
       autoToggle.appendChild(checkbox);
@@ -263,7 +323,7 @@ export default defineContentScript({
 
         try {
           console.log('Establishing connection to background script...');
-          const port = chrome.runtime.connect({ name: "altTextGenerator" });
+          const port = safeChrome.runtime.connect({ name: "altTextGenerator" });
           console.log('Connection established.');
           button.textContent = 'Generating...'; // Update state
 

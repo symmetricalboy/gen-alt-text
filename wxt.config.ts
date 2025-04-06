@@ -10,7 +10,7 @@ export default defineConfig({
     author: 'Your Name',
     
     // Permissions needed
-    permissions: [],
+    permissions: ['storage'],
     host_permissions: [
       '*://*.bsky.app/*',               // Access to Bluesky
       'https://generativelanguage.googleapis.com/*' // Gemini API

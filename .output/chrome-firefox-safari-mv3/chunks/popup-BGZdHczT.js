@@ -1,6 +1,4 @@
-import './style.css';
-
-document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
+(function(){const o=document.createElement("link").relList;if(o&&o.supports&&o.supports("modulepreload"))return;for(const e of document.querySelectorAll('link[rel="modulepreload"]'))c(e);new MutationObserver(e=>{for(const s of e)if(s.type==="childList")for(const i of s.addedNodes)i.tagName==="LINK"&&i.rel==="modulepreload"&&c(i)}).observe(document,{childList:!0,subtree:!0});function r(e){const s={};return e.integrity&&(s.integrity=e.integrity),e.referrerPolicy&&(s.referrerPolicy=e.referrerPolicy),e.crossOrigin==="use-credentials"?s.credentials="include":e.crossOrigin==="anonymous"?s.credentials="omit":s.credentials="same-origin",s}function c(e){if(e.ep)return;e.ep=!0;const s=r(e);fetch(e.href,s)}})();try{}catch(t){console.error("[wxt] Failed to initialize plugins",t)}document.querySelector("#app").innerHTML=`
   <div>
     <div class="app-icon-container">
       <svg width="48" height="48" viewBox="-5 -10 128 128" xmlns="http://www.w3.org/2000/svg">
@@ -48,55 +46,4 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <p class="copyright">Copyright © 2025 Dylan Gregori Singer (symmetricalboy)</p>
     </div>
   </div>
-`;
-
-// Helper function to safely access chrome APIs
-const safeChrome = {
-  storage: {
-    sync: {
-      get: (keys, callback) => {
-        try {
-          if (chrome?.storage?.sync) {
-            chrome.storage.sync.get(keys, callback);
-          } else {
-            console.warn('Chrome storage API not available, using default values');
-            callback({});
-          }
-        } catch (error) {
-          console.error('Error accessing chrome.storage.sync.get:', error);
-          callback({});
-        }
-      },
-      set: (items) => {
-        try {
-          if (chrome?.storage?.sync) {
-            chrome.storage.sync.set(items);
-          } else {
-            console.warn('Chrome storage API not available, cannot save settings');
-          }
-        } catch (error) {
-          console.error('Error accessing chrome.storage.sync.set:', error);
-        }
-      }
-    }
-  }
-};
-
-// Load saved options
-safeChrome.storage.sync.get(['autoMode', 'showToasts'], (result) => {
-  const autoModeToggle = document.getElementById('autoMode') as HTMLInputElement;
-  const showToastsToggle = document.getElementById('showToasts') as HTMLInputElement;
-  
-  // Set initial toggle states
-  if (result.autoMode !== undefined) autoModeToggle.checked = result.autoMode;
-  if (result.showToasts !== undefined) showToastsToggle.checked = result.showToasts;
-  
-  // Add change listeners
-  autoModeToggle.addEventListener('change', () => {
-    safeChrome.storage.sync.set({ autoMode: autoModeToggle.checked });
-  });
-  
-  showToastsToggle.addEventListener('change', () => {
-    safeChrome.storage.sync.set({ showToasts: showToastsToggle.checked });
-  });
-});
+`;const a={storage:{sync:{get:(t,o)=>{var r;try{(r=chrome==null?void 0:chrome.storage)!=null&&r.sync?chrome.storage.sync.get(t,o):(console.warn("Chrome storage API not available, using default values"),o({}))}catch(c){console.error("Error accessing chrome.storage.sync.get:",c),o({})}},set:t=>{var o;try{(o=chrome==null?void 0:chrome.storage)!=null&&o.sync?chrome.storage.sync.set(t):console.warn("Chrome storage API not available, cannot save settings")}catch(r){console.error("Error accessing chrome.storage.sync.set:",r)}}}}};a.storage.sync.get(["autoMode","showToasts"],t=>{const o=document.getElementById("autoMode"),r=document.getElementById("showToasts");t.autoMode!==void 0&&(o.checked=t.autoMode),t.showToasts!==void 0&&(r.checked=t.showToasts),o.addEventListener("change",()=>{a.storage.sync.set({autoMode:o.checked})}),r.addEventListener("change",()=>{a.storage.sync.set({showToasts:r.checked})})});
