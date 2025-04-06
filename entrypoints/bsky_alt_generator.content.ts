@@ -195,13 +195,21 @@ export default defineContentScript({
 
       for (const el of candidates) {
         let currentScore = 0;
+        const elRect = el.getBoundingClientRect();
         
         // --- Basic Checks & Filtering --- 
+        
+        // 0. Visibility Check (Must be rendered)
+        if (elRect.width === 0 || elRect.height === 0 || el.offsetParent === null) {
+           // console.log('Skipping candidate (not visible):', el);
+           continue; 
+        }
+
         if (el.tagName === 'VIDEO') {
           if (el.src || el.querySelector('source[src]')) {
             console.log('Found video candidate:', el);
             // Videos are usually the primary media if present
-            currentScore = 100; 
+            currentScore = 1000; // High score for video
           } else {
             continue; // Skip video tags without src
           }
@@ -210,51 +218,62 @@ export default defineContentScript({
           const src = img.src || '';
           const alt = img.alt || '';
 
-          // 1. Basic Exclusions
+          // 1. Basic Exclusions (Avatars, invalid src)
           if (!src || src.startsWith('data:') || alt.toLowerCase().includes('avatar') || src.includes('avatar') || src.includes('profile')) {
+            // console.log('Skipping image (avatar/invalid src):', img);
             continue;
           }
 
-          // 2. Visibility & Position Check
-          const rect = img.getBoundingClientRect();
-          if (rect.width === 0 || rect.height === 0 || img.offsetParent === null) {
-            continue; // Skip non-visible images
+          // 2. Stricter Position Check (Center point must be within composer bounds)
+          const imgCenterX = elRect.left + elRect.width / 2;
+          const imgCenterY = elRect.top + elRect.height / 2;
+          if (imgCenterX < composerRect.left || imgCenterX > composerRect.right || imgCenterY < composerRect.top || imgCenterY > composerRect.bottom) {
+              console.log('Skipping image: center point outside composer bounds.', img);
+              continue; 
           }
-          // Ensure the image is actually within the composer's visual bounds (simple check)
-          // This helps filter out elements behind the modal that might still be in the DOM query
-          if (rect.top < composerRect.top || rect.left < composerRect.left || rect.bottom > composerRect.bottom || rect.right > composerRect.right) {
-             // console.log('Skipping image potentially outside composer bounds:', img);
-             // continue; // Temporarily disable this check, might be too strict
-          }
-
+          
           // 3. Size Check 
           const minSize = 50;
-          if (rect.width < minSize || rect.height < minSize) {
+          if (elRect.width < minSize || elRect.height < minSize) {
+            // console.log(`Skipping image (too small: ${elRect.width}x${elRect.height}):`, img);
             continue;
           }
           
           // --- Scoring & Prioritization --- 
-          currentScore = 1; // Base score for being a visible, non-avatar image
-          console.log(`Valid image candidate found: ${rect.width}x${rect.height}`, img);
+          currentScore = 1; // Base score for being a visible, non-avatar image within bounds
+          console.log(`Valid image candidate found: ${elRect.width}x${elRect.height}`, img);
 
-          // Boost score significantly if it's inside a known preview structure
-          const previewWrapper = img.closest('[data-testid="imagePreview"], [data-testid="images"], .r-1p0dtai, [role="img"]');
+          // VERY HIGH boost if it's inside the *exact* preview structure
+          const previewWrapper = img.closest('[data-testid="imagePreview"], .r-1p0dtai[style*="aspect-ratio"]'); // More specific selector for preview
           if (previewWrapper) {
-            console.log('Image is inside a known preview wrapper, boosting score.');
-            currentScore += 50;
+            console.log('Image is inside a high-priority preview wrapper, boosting score significantly.');
+            currentScore += 500;
+            
+            // Check if the wrapper is directly within the main container (not deeply nested)
+            if (previewWrapper.parentElement === container || previewWrapper.parentElement?.parentElement === container) {
+               console.log('Preview wrapper is close to container root, further boost.');
+               currentScore += 50;
+            }
           }
           
-          // Boost score if it has specific test ids itself
-          if(img.matches('[data-testid*="image"], [data-testid*="preview"]')) {
-             console.log('Image has a relevant test ID, boosting score.');
-             currentScore += 20;
+          // Moderate boost for other relevant test IDs or roles
+          if(img.matches('[data-testid*="image"], [data-testid*="preview"], [role="img"]') && !previewWrapper) {
+             console.log('Image has a relevant test ID/role, boosting score.');
+             currentScore += 50;
           }
           
-          // Slightly boost larger images within the composer
-          currentScore += Math.min(5, Math.floor(rect.width / 100)); 
+          // Penalize if it looks like it's part of a background post structure
+          if (img.closest('[data-testid="postView"], [role="article"]') !== container.closest('[data-testid="postView"], [role="article"]')) {
+               console.log('Image seems to be inside a *different* post structure, penalizing score.');
+               currentScore -= 10;
+          }
+          
+          // Slight boost for larger images
+          currentScore += Math.min(5, Math.floor(elRect.width / 100)); 
         }
         
         // --- Selection --- 
+        console.log('Candidate score:', currentScore, el);
         if (currentScore > highestScore) {
             highestScore = currentScore;
             bestCandidate = el;
@@ -265,7 +284,7 @@ export default defineContentScript({
       if (bestCandidate) {
         console.log('Final selected best candidate:', bestCandidate);
       } else {
-         console.error('Failed to find a suitable media candidate within the container after scoring.');
+         console.error('Failed to find a suitable media candidate within the container after scoring (Highest score <= 0).');
       }
 
       return bestCandidate; // Return the highest scoring candidate or null
