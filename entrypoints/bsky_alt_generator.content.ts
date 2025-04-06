@@ -189,7 +189,8 @@ export default defineContentScript({
       const candidates = Array.from(container.querySelectorAll('img, video'));
       console.log(`Found ${candidates.length} initial candidates (img/video) in container.`);
 
-      const composerRect = container.getBoundingClientRect(); // Get bounds of the composer/modal
+      // Get bounds of the composer/modal - NOTE: May be inaccurate if container is too large
+      // const composerRect = container.getBoundingClientRect(); 
       let bestCandidate = null;
       let highestScore = -1;
 
@@ -208,7 +209,6 @@ export default defineContentScript({
         if (el.tagName === 'VIDEO') {
           if (el.src || el.querySelector('source[src]')) {
             console.log('Found video candidate:', el);
-            // Videos are usually the primary media if present
             currentScore = 1000; // High score for video
           } else {
             continue; // Skip video tags without src
@@ -224,13 +224,15 @@ export default defineContentScript({
             continue;
           }
 
-          // 2. Stricter Position Check (Center point must be within composer bounds)
+          // 2. REMOVED Position Check - Was likely causing issues due to inaccurate container bounds
+          /*
           const imgCenterX = elRect.left + elRect.width / 2;
           const imgCenterY = elRect.top + elRect.height / 2;
           if (imgCenterX < composerRect.left || imgCenterX > composerRect.right || imgCenterY < composerRect.top || imgCenterY > composerRect.bottom) {
               console.log('Skipping image: center point outside composer bounds.', img);
               continue; 
           }
+          */
           
           // 3. Size Check 
           const minSize = 50;
@@ -240,32 +242,36 @@ export default defineContentScript({
           }
           
           // --- Scoring & Prioritization --- 
-          currentScore = 1; // Base score for being a visible, non-avatar image within bounds
+          currentScore = 1; // Base score for being a visible, non-avatar image
           console.log(`Valid image candidate found: ${elRect.width}x${elRect.height}`, img);
 
           // VERY HIGH boost if it's inside the *exact* preview structure
-          const previewWrapper = img.closest('[data-testid="imagePreview"], .r-1p0dtai[style*="aspect-ratio"]'); // More specific selector for preview
+          const previewWrapper = img.closest('[data-testid="imagePreview"], .r-1p0dtai[style*="aspect-ratio"]');
           if (previewWrapper) {
             console.log('Image is inside a high-priority preview wrapper, boosting score significantly.');
             currentScore += 500;
             
             // Check if the wrapper is directly within the main container (not deeply nested)
-            if (previewWrapper.parentElement === container || previewWrapper.parentElement?.parentElement === container) {
-               console.log('Preview wrapper is close to container root, further boost.');
-               currentScore += 50;
-            }
+            // This check might be less useful now that container finding is less reliable
+            // if (previewWrapper.parentElement === container || previewWrapper.parentElement?.parentElement === container) {
+            //    console.log('Preview wrapper is close to container root, further boost.');
+            //    currentScore += 50;
+            // }
           }
           
-          // Moderate boost for other relevant test IDs or roles
-          if(img.matches('[data-testid*="image"], [data-testid*="preview"], [role="img"]') && !previewWrapper) {
+          // Moderate boost for other relevant test IDs or roles if not already boosted
+          if (currentScore <= 1 && img.matches('[data-testid*="image"], [data-testid*="preview"], [role="img"]')) {
              console.log('Image has a relevant test ID/role, boosting score.');
              currentScore += 50;
           }
           
           // Penalize if it looks like it's part of a background post structure
-          if (img.closest('[data-testid="postView"], [role="article"]') !== container.closest('[data-testid="postView"], [role="article"]')) {
+          // Compare closest post container of image vs closest post container of the main container
+          const imgPostContainer = img.closest('[data-testid="postView"], [role="article"]');
+          const mainPostContainer = container.closest('[data-testid="postView"], [role="article"]');
+          if (imgPostContainer && mainPostContainer && imgPostContainer !== mainPostContainer) {
                console.log('Image seems to be inside a *different* post structure, penalizing score.');
-               currentScore -= 10;
+               currentScore = Math.max(0, currentScore - 100); // Stronger penalty
           }
           
           // Slight boost for larger images
