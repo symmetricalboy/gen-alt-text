@@ -185,9 +185,24 @@ export default defineContentScript({
     // Function to find media elements in the composer
     const findMediaElement = (container) => {
       console.log('Searching for media in container:', container);
-      
+
+      // --- PRIORITY 1: Check for local file preview (Data URL) ---
+      const dataUrlImage = container.querySelector('img[src^="data:image/"]');
+      if (dataUrlImage) {
+        console.log('Found image via data URL (local file preview):', dataUrlImage);
+        const rect = dataUrlImage.getBoundingClientRect();
+        // Basic sanity check for visibility/size
+        if (rect.width > 30 && rect.height > 30 && dataUrlImage.offsetParent !== null) {
+           return dataUrlImage;
+        } else {
+           console.warn('Data URL image found but seems hidden or too small, continuing search...');
+        }
+      }
+
+      // --- Fallback to existing scoring logic if no data URL image found ---
+      console.log('No valid data URL image found, proceeding to scoring logic...');
       const candidates = Array.from(container.querySelectorAll('img, video'));
-      console.log(`Found ${candidates.length} initial candidates (img/video) in container.`);
+      console.log(`Found ${candidates.length} candidates for scoring.`);
 
       // Get bounds of the composer/modal - NOTE: May be inaccurate if container is too large
       // const composerRect = container.getBoundingClientRect(); 
@@ -201,13 +216,15 @@ export default defineContentScript({
         // --- Basic Checks & Filtering --- 
         
         // 0. Visibility Check (Must be rendered)
+        // Basic Visibility Check
         if (elRect.width === 0 || elRect.height === 0 || el.offsetParent === null) {
            // console.log('Skipping candidate (not visible):', el);
            continue; 
         }
 
         if (el.tagName === 'VIDEO') {
-          if (el.src || el.querySelector('source[src]')) {
+          // Added check for data URL video as well
+          if (el.src?.startsWith('data:video/') || el.src || el.querySelector('source[src]')) {
             console.log('Found video candidate:', el);
             currentScore = 1000; // High score for video
           } else {
@@ -219,6 +236,7 @@ export default defineContentScript({
           const alt = img.alt || '';
 
           // 1. Basic Exclusions (Avatars, invalid src)
+          // Basic Exclusions (Avatars, already checked data URLs)
           if (!src || src.startsWith('data:') || alt.toLowerCase().includes('avatar') || src.includes('avatar') || src.includes('profile')) {
             // console.log('Skipping image (avatar/invalid src):', img);
             continue;
@@ -246,7 +264,7 @@ export default defineContentScript({
           console.log(`Valid image candidate found: ${elRect.width}x${elRect.height}`, img);
 
           // VERY HIGH boost if it's inside the *exact* preview structure
-          const previewWrapper = img.closest('[data-testid="imagePreview"], .r-1p0dtai[style*="aspect-ratio"]');
+          const previewWrapper = img.closest('[data-testid="imagePreview"], .r-1p0dtai[style*="aspect-ratio"]'); // Keep using reliable non-generated selectors where possible
           if (previewWrapper) {
             console.log('Image is inside a high-priority preview wrapper, boosting score significantly.');
             currentScore += 500;
@@ -288,9 +306,10 @@ export default defineContentScript({
       }
       
       if (bestCandidate) {
-        console.log('Final selected best candidate:', bestCandidate);
+        console.log('Final selected best candidate (from scoring):', bestCandidate);
       } else {
          console.error('Failed to find a suitable media candidate within the container after scoring (Highest score <= 0).');
+         console.error('Failed to find suitable media via scoring.');
       }
 
       return bestCandidate; // Return the highest scoring candidate or null
