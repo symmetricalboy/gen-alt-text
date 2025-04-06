@@ -189,75 +189,86 @@ export default defineContentScript({
       const candidates = Array.from(container.querySelectorAll('img, video'));
       console.log(`Found ${candidates.length} initial candidates (img/video) in container.`);
 
+      const composerRect = container.getBoundingClientRect(); // Get bounds of the composer/modal
       let bestCandidate = null;
+      let highestScore = -1;
 
       for (const el of candidates) {
+        let currentScore = 0;
+        
+        // --- Basic Checks & Filtering --- 
         if (el.tagName === 'VIDEO') {
-          // Basic check for video source
           if (el.src || el.querySelector('source[src]')) {
-            console.log('Found valid video candidate:', el);
-            // Prioritize video if found
-            bestCandidate = el;
-            break; // Found a video, assume it's the one
+            console.log('Found video candidate:', el);
+            // Videos are usually the primary media if present
+            currentScore = 100; 
+          } else {
+            continue; // Skip video tags without src
           }
-          continue; // Skip video tags without src
+        } else { // Process IMG tags
+          const img = el;
+          const src = img.src || '';
+          const alt = img.alt || '';
+
+          // 1. Basic Exclusions
+          if (!src || src.startsWith('data:') || alt.toLowerCase().includes('avatar') || src.includes('avatar') || src.includes('profile')) {
+            continue;
+          }
+
+          // 2. Visibility & Position Check
+          const rect = img.getBoundingClientRect();
+          if (rect.width === 0 || rect.height === 0 || img.offsetParent === null) {
+            continue; // Skip non-visible images
+          }
+          // Ensure the image is actually within the composer's visual bounds (simple check)
+          // This helps filter out elements behind the modal that might still be in the DOM query
+          if (rect.top < composerRect.top || rect.left < composerRect.left || rect.bottom > composerRect.bottom || rect.right > composerRect.right) {
+             // console.log('Skipping image potentially outside composer bounds:', img);
+             // continue; // Temporarily disable this check, might be too strict
+          }
+
+          // 3. Size Check 
+          const minSize = 50;
+          if (rect.width < minSize || rect.height < minSize) {
+            continue;
+          }
+          
+          // --- Scoring & Prioritization --- 
+          currentScore = 1; // Base score for being a visible, non-avatar image
+          console.log(`Valid image candidate found: ${rect.width}x${rect.height}`, img);
+
+          // Boost score significantly if it's inside a known preview structure
+          const previewWrapper = img.closest('[data-testid="imagePreview"], [data-testid="images"], .r-1p0dtai, [role="img"]');
+          if (previewWrapper) {
+            console.log('Image is inside a known preview wrapper, boosting score.');
+            currentScore += 50;
+          }
+          
+          // Boost score if it has specific test ids itself
+          if(img.matches('[data-testid*="image"], [data-testid*="preview"]')) {
+             console.log('Image has a relevant test ID, boosting score.');
+             currentScore += 20;
+          }
+          
+          // Slightly boost larger images within the composer
+          currentScore += Math.min(5, Math.floor(rect.width / 100)); 
         }
-
-        // Process IMG tags
-        const img = el;
-        const src = img.src || '';
-        const alt = img.alt || '';
-
-        // --- Filtering Logic --- 
         
-        // 1. Basic Exclusions (Avatars, tiny icons, invalid src)
-        if (!src || src.startsWith('data:') || alt.toLowerCase().includes('avatar') || src.includes('avatar') || src.includes('profile')) {
-          // console.log('Skipping image (avatar/invalid src):', img);
-          continue;
-        }
-
-        // 2. Visibility Check (must be rendered and not hidden)
-        if (img.offsetParent === null) {
-          // console.log('Skipping image (not visible):', img);
-          continue;
-        }
-
-        // 3. Size Check (use getBoundingClientRect for accuracy)
-        const rect = img.getBoundingClientRect();
-        const width = rect.width;
-        const height = rect.height;
-        // Use a reasonable threshold - images in composer are usually substantial
-        const minSize = 50; 
-        if (width < minSize || height < minSize) {
-          // console.log(`Skipping image (too small: ${width}x${height}):`, img);
-          continue;
-        }
-
-        // --- Prioritization Logic --- 
-        
-        // If this image passes all filters, it's a potential candidate
-        console.log(`Valid image candidate found: ${width}x${height}`, img);
-
-        // Prioritize images with specific data-testid or within known wrappers
-        if (img.closest('[data-testid="imagePreview"], [data-testid="images"], .r-1p0dtai, [role="img"]')) {
-          console.log('Prioritizing image due to parent wrapper/test-id.');
-          bestCandidate = img;
-          break; // Found a high-priority image, assume it's the one
-        }
-
-        // If no high-priority image found yet, keep the first valid one
-        if (!bestCandidate) {
-          bestCandidate = img;
+        // --- Selection --- 
+        if (currentScore > highestScore) {
+            highestScore = currentScore;
+            bestCandidate = el;
+            console.log('New best candidate selected with score:', highestScore, bestCandidate);
         }
       }
       
       if (bestCandidate) {
-        console.log('Selected best candidate:', bestCandidate);
+        console.log('Final selected best candidate:', bestCandidate);
       } else {
-         console.error('Failed to find a suitable media candidate within the container.');
+         console.error('Failed to find a suitable media candidate within the container after scoring.');
       }
 
-      return bestCandidate; // Return the best found candidate or null
+      return bestCandidate; // Return the highest scoring candidate or null
     };
     
     // Add the button to an alt text textarea
