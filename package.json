@@ -1,0 +1,28 @@
+{
+  "name": "wxt-starter",
+  "description": "manifest.json description",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox",
+    "dev:chrome": "wxt -b chrome",
+    "dev:safari": "wxt -b safari",
+    "build": "wxt build",
+    "build:firefox": "wxt build --browser firefox",
+    "build:chrome": "wxt build --browser chrome",
+    "build:safari": "wxt build --browser safari",
+    "zip": "wxt zip",
+    "zip:firefox": "wxt zip --browser firefox",
+    "zip:chrome": "wxt zip --browser chrome",
+    "zip:safari": "wxt zip --browser safari",
+    "compile": "tsc --noEmit",
+    "postinstall": "wxt prepare"
+  },
+  "devDependencies": {
+    "@wxt-dev/auto-icons": "^1.0.2",
+    "typescript": "^5.6.3",
+    "wxt": "^0.20.0"
+  }
+}
