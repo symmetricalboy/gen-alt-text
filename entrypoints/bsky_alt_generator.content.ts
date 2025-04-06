@@ -9,7 +9,7 @@ export default defineContentScript({
     }
     
     // Constants
-    const ALT_TEXT_SELECTOR = 'textarea[aria-label="Image description"]';
+    const ALT_TEXT_SELECTOR = 'textarea[aria-label="Alt text"]';
     const BUTTON_ID = 'gemini-alt-text-button';
     
     // Add the button to an alt text textarea
