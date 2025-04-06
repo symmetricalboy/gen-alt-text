@@ -51,15 +51,29 @@ export default defineContentScript({
       // Create the button
       const button = document.createElement('button');
       button.id = BUTTON_ID;
-      button.textContent = 'Gen Alt Text';
+      button.title = 'Generate Alt Text'; // Add tooltip
+      
+      // Create icon element using the SVG from our extension
+      const iconImg = document.createElement('img');
+      iconImg.src = chrome.runtime.getURL('icon/gen-alt-text.svg');
+      iconImg.alt = 'Generate Alt Text';
+      iconImg.style.width = '20px';
+      iconImg.style.height = '20px';
+      iconImg.style.display = 'block';
+      
+      // Append the icon to the button
+      button.appendChild(iconImg);
+      
+      // Style the button
       button.style.marginLeft = '8px'; // Add some spacing
-      button.style.padding = '2px 8px';
-      button.style.fontSize = '0.9em';
+      button.style.padding = '4px';
       button.style.cursor = 'pointer';
       button.style.border = '1px solid #ccc';
       button.style.borderRadius = '4px';
       button.style.backgroundColor = '#f0f0f0';
-      button.style.setProperty('display', 'inline-block', 'important'); 
+      button.style.display = 'flex';
+      button.style.alignItems = 'center';
+      button.style.justifyContent = 'center';
       button.style.setProperty('visibility', 'visible', 'important');
       button.style.setProperty('z-index', '9999', 'important');
       button.style.setProperty('position', 'relative', 'important');
@@ -73,6 +87,8 @@ export default defineContentScript({
         e.stopPropagation(); 
 
         console.log('Generate Alt Text button clicked');
+        // Replace icon with text during states
+        button.innerHTML = ''; // Clear icon
         button.textContent = 'Connecting...'; // Update initial state
         button.disabled = true;
 
@@ -87,7 +103,8 @@ export default defineContentScript({
           console.error('Could not find image element or its src using specific selector.');
           button.textContent = 'Error: No Image';
           setTimeout(() => {
-             button.textContent = 'Gen Alt Text'; 
+             button.textContent = '';
+             button.appendChild(iconImg.cloneNode(true));
              button.disabled = false;
             }, 2000);
           return;
@@ -112,14 +129,18 @@ export default defineContentScript({
               console.log('Alt text inserted.');
               button.textContent = '✓ Done';
               setTimeout(() => {
-                button.textContent = 'Gen Alt Text'; 
+                // Restore the icon after completion
+                button.textContent = '';
+                button.appendChild(iconImg.cloneNode(true));
                 button.disabled = false;
               }, 1500);
             } else if (response.error) {
               console.error('Error generating alt text:', response.error);
               button.textContent = `Error: ${response.error.substring(0,20)}...`;
               setTimeout(() => {
-                button.textContent = 'Gen Alt Text'; 
+                // Restore the icon after error
+                button.textContent = '';
+                button.appendChild(iconImg.cloneNode(true));
                 button.disabled = false;
               }, 3000);
             } else {
@@ -127,7 +148,9 @@ export default defineContentScript({
               console.error('Received unexpected message format from background:', response);
                button.textContent = 'Msg Format Error';
                setTimeout(() => {
-                 button.textContent = 'Gen Alt Text'; 
+                 // Restore the icon after error
+                 button.textContent = '';
+                 button.appendChild(iconImg.cloneNode(true));
                  button.disabled = false;
                 }, 2000);
             }
@@ -141,7 +164,9 @@ export default defineContentScript({
             if (!button.textContent.includes('Done') && !button.textContent.includes('Error')) {
                  button.textContent = 'Disconnect Error';
                  setTimeout(() => {
-                   button.textContent = 'Gen Alt Text'; 
+                   // Restore the icon after error
+                   button.textContent = '';
+                   button.appendChild(iconImg.cloneNode(true));
                    button.disabled = false;
                   }, 3000);
             }
@@ -157,7 +182,9 @@ export default defineContentScript({
           console.error('Error establishing connection or posting initial message:', error);
           button.textContent = 'Connect Error';
            setTimeout(() => {
-               button.textContent = 'Gen Alt Text'; 
+               // Restore the icon after error
+               button.textContent = '';
+               button.appendChild(iconImg.cloneNode(true));
                button.disabled = false;
               }, 2000);
         }

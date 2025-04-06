@@ -28,40 +28,57 @@ body {
   display: flex;
   place-items: center;
   min-width: 320px;
-  min-height: 100vh;
+  min-height: 100px;
 }
 
 h1 {
-  font-size: 3.2em;
+  font-size: 1.8em;
   line-height: 1.1;
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
 }
 
 #app {
-  max-width: 1280px;
+  width: 350px;
   margin: 0 auto;
-  padding: 2rem;
+  padding: 1rem;
   text-align: center;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #54bc4ae0);
-}
-.logo.vanilla:hover {
-  filter: drop-shadow(0 0 2em #3178c6aa);
+.description {
+  margin-bottom: 1.5em;
+  font-size: 0.95em;
 }
 
-.card {
-  padding: 2em;
+.options-section {
+  text-align: left;
+  border-top: 1px solid #444;
+  padding-top: 1em;
+  margin-top: 1em;
 }
 
-.read-the-docs {
+.footer {
+  margin-top: 1.5em;
+  padding-top: 1em;
+  border-top: 1px solid #444;
+  font-size: 0.8em;
+  text-align: center;
+}
+
+.footer p {
+  margin: 0.5em 0;
+}
+
+.copyright {
+  margin-top: 0.5em;
+  font-size: 0.9em;
   color: #888;
+}
+
+.app-icon {
+  max-width: 48px;
+  height: auto;
+  margin-bottom: 0.5em;
 }
 
 button {
@@ -93,5 +110,11 @@ button:focus-visible {
   }
   button {
     background-color: #f9f9f9;
+  }
+  .footer, .options-section {
+    border-color: #ddd;
+  }
+  .copyright {
+    color: #666;
   }
 }
