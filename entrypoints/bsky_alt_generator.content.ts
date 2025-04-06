@@ -13,117 +13,171 @@ export default defineContentScript({
     const BUTTON_ID = 'gemini-alt-text-button';
     
     // Add the button to an alt text textarea
-    function addGenerateButton(textarea) {
-      // Avoid duplicates
-      if (textarea.parentElement?.querySelector(`#${BUTTON_ID}`)) {
+    function addGenerateButton(textarea: HTMLTextAreaElement) {
+      console.log('addGenerateButton called for textarea:', textarea); // Log function start and target
+
+      // Prevent adding multiple buttons
+      if (textarea.dataset.geminiButtonAdded === 'true') {
+        console.log('Button already added to this textarea, skipping.');
+        return;
+      }
+
+      // Find the parent element that likely contains the post button, etc.
+      // Adjust the number of parentElement calls if the structure changes.
+      // Let's use a more robust way, searching upwards for a container with specific characteristics
+      // This is a placeholder - needs inspection if button placement is wrong
+      let container = textarea.closest('div[data-testid="composer"]'); // Example: Look for a common composer container test ID
+      if (!container) {
+          // Fallback if the test ID isn't found or changes
+          container = textarea.parentElement?.parentElement?.parentElement; 
+          console.log('Using fallback container:', container);
+      } else {
+          console.log('Found container via closest():', container);
+      }
+
+
+      if (!container) {
+        console.error('Could not find a suitable container for the button near textarea:', textarea);
         return;
       }
       
-      console.log('Found alt text textarea - adding button');
-      
-      // Create button
+      // Check if button already exists within this specific container instance (less likely needed with the dataset check, but safe)
+      if (container.querySelector(`#${BUTTON_ID}`)) {
+        console.log('Button already exists in this container, skipping.');
+        return;
+      }
+
+
+      // Create the button
       const button = document.createElement('button');
       button.id = BUTTON_ID;
-      button.textContent = '✨ Gen Alt Text';
-      button.type = 'button';
-      button.style.cssText = `
-        margin-top: 8px;
-        padding: 6px 12px;
-        background: linear-gradient(90deg, #7C3AED 0%, #5B21B6 100%);
-        color: white;
-        border: none;
-        border-radius: 4px;
-        font-size: 14px;
-        cursor: pointer;
-        font-weight: 500;
-        transition: all 0.2s;
-      `;
+      button.textContent = 'Gen Alt Text';
+      button.style.marginLeft = '8px'; // Add some spacing
+      button.style.padding = '2px 8px';
+      button.style.fontSize = '0.9em';
+      button.style.cursor = 'pointer';
+      button.style.border = '1px solid #ccc';
+      button.style.borderRadius = '4px';
+      button.style.backgroundColor = '#f0f0f0';
+      button.style.setProperty('display', 'inline-block', 'important'); 
+      button.style.setProperty('visibility', 'visible', 'important');
+      button.style.setProperty('z-index', '9999', 'important');
+      button.style.setProperty('position', 'relative', 'important');
       
-      // Add hover effect
-      button.addEventListener('mouseover', () => {
-        button.style.opacity = '0.9';
-        button.style.transform = 'translateY(-1px)';
-      });
-      button.addEventListener('mouseout', () => {
-        button.style.opacity = '1';
-        button.style.transform = 'translateY(0)';
-      });
-      
-      // Add click handler
-      button.addEventListener('click', async () => {
-        // Find the associated image
-        const composerContainer = findComposerContainer(textarea);
-        if (!composerContainer) {
-          alert('Could not find the composer container');
-          return;
-        }
-        
-        // Find the image preview
-        const imagePreview = composerContainer.querySelector('img[alt="Image preview"]');
-        if (!imagePreview || !imagePreview.src) {
-          alert('Could not find the image preview');
-          return;
-        }
-        
-        // Show loading state
-        const originalText = button.textContent;
-        button.textContent = '⏳ Generating...';
+      console.log('Button element created:', button);
+
+
+      // Button click handler
+      button.onclick = async (e) => { // Keep async for potential future needs, though connect is synchronous
+        e.preventDefault(); 
+        e.stopPropagation(); 
+
+        console.log('Generate Alt Text button clicked');
+        button.textContent = 'Connecting...'; // Update initial state
         button.disabled = true;
-        button.style.opacity = '0.7';
-        
-        try {
-          // Send message to background script
-          const response = await browser.runtime.sendMessage({
-            type: 'GENERATE_ALT_TEXT',
-            imageUrl: imagePreview.src
-          });
-          
-          if (!response.success) {
-            throw new Error(response.error || 'Failed to generate alt text');
-          }
-          
-          // Update the textarea with the generated alt text
-          textarea.value = response.altText;
-          
-          // Trigger input event so Bluesky registers the change
-          textarea.dispatchEvent(new Event('input', { bubbles: true }));
-          
-          console.log('Alt text updated successfully');
-          
-          // Show success state briefly
-          button.textContent = '✓ Done!';
-          button.style.background = 'linear-gradient(90deg, #059669 0%, #10B981 100%)';
-          
-          // Reset after 2 seconds
+
+        // Find image element (using the specific selector for now)
+        let imageElement = document.querySelector('#root > div > div > div > div > div.css-175oi2r > div:nth-child(2) > div > div > div > div:nth-child(2) > div.css-175oi2r > div > div > img') as HTMLImageElement | null;
+        console.log('Image found via specific selector:', imageElement);
+
+        // Fallback (keep it simple for now, assume specific selector works)
+        // if (!imageElement) { ... }
+
+        if (!imageElement || !imageElement.src) {
+          console.error('Could not find image element or its src using specific selector.');
+          button.textContent = 'Error: No Image';
           setTimeout(() => {
-            button.textContent = originalText;
-            button.style.background = 'linear-gradient(90deg, #7C3AED 0%, #5B21B6 100%)';
-            button.disabled = false;
-            button.style.opacity = '1';
-          }, 2000);
-          
-        } catch (error) {
-          console.error('Error generating alt text:', error);
-          
-          // Show error state
-          button.textContent = '❌ Error';
-          button.style.background = 'linear-gradient(90deg, #DC2626 0%, #EF4444 100%)';
-          
-          // Show error message
-          alert(`Error: ${error.message || 'Failed to generate alt text'}`);
-          
-          // Reset after 2 seconds
-          setTimeout(() => {
-            button.textContent = originalText;
-            button.style.background = 'linear-gradient(90deg, #7C3AED 0%, #5B21B6 100%)';
-            button.disabled = false;
-            button.style.opacity = '1';
-          }, 2000);
+             button.textContent = 'Gen Alt Text'; 
+             button.disabled = false;
+            }, 2000);
+          return;
         }
-      });
+
+        const imageUrl = imageElement.src;
+        console.log('Image URL:', imageUrl);
+
+        try {
+          console.log('Establishing connection to background script...');
+          const port = chrome.runtime.connect({ name: "altTextGenerator" });
+          console.log('Connection established.');
+          button.textContent = 'Generating...'; // Update state
+
+          // Listener for responses from the background script via this port
+          port.onMessage.addListener((response) => {
+            console.log('Message received from background via port:', response);
+
+            if (response.altText) {
+              textarea.value = response.altText;
+              textarea.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+              console.log('Alt text inserted.');
+              button.textContent = '✓ Done';
+              setTimeout(() => {
+                button.textContent = 'Gen Alt Text'; 
+                button.disabled = false;
+              }, 1500);
+            } else if (response.error) {
+              console.error('Error generating alt text:', response.error);
+              button.textContent = `Error: ${response.error.substring(0,20)}...`;
+              setTimeout(() => {
+                button.textContent = 'Gen Alt Text'; 
+                button.disabled = false;
+              }, 3000);
+            } else {
+              // Handle unexpected message format
+              console.error('Received unexpected message format from background:', response);
+               button.textContent = 'Msg Format Error';
+               setTimeout(() => {
+                 button.textContent = 'Gen Alt Text'; 
+                 button.disabled = false;
+                }, 2000);
+            }
+            port.disconnect(); // Disconnect after receiving the response
+          });
+
+          // Listener for when the connection is disconnected unexpectedly
+          port.onDisconnect.addListener(() => {
+            console.error('Background port disconnected unexpectedly.', chrome.runtime.lastError || '(No error info)');
+            // Only update button if it hasn't already shown success/error
+            if (!button.textContent.includes('Done') && !button.textContent.includes('Error')) {
+                 button.textContent = 'Disconnect Error';
+                 setTimeout(() => {
+                   button.textContent = 'Gen Alt Text'; 
+                   button.disabled = false;
+                  }, 3000);
+            }
+          });
+
+          // Send the message to the background script via the port
+          console.log('Sending message via port...');
+          port.postMessage({ action: 'generateAltText', imageUrl: imageUrl });
+          console.log('Message sent via port.');
+
+        } catch (error) {
+          // Catch errors related to establishing the connection itself
+          console.error('Error establishing connection or posting initial message:', error);
+          button.textContent = 'Connect Error';
+           setTimeout(() => {
+               button.textContent = 'Gen Alt Text'; 
+               button.disabled = false;
+              }, 2000);
+        }
+        // Note: No `finally` block needed here as the button state is handled by listeners
+      };
+
+      // Append the button - Try appending as the last child of the parent
+      const parent = textarea.parentNode;
+      if (parent) {
+          console.log('Attempting to append button to parent:', parent);
+          parent.appendChild(button);
+      } else {
+           console.error('Could not find parent node to append button to.');
+      }
       
-      // Add the button after the textarea
-      textarea.parentElement.appendChild(button);
+      // Mark the textarea so we don't add the button again
+      textarea.dataset.geminiButtonAdded = 'true'; 
+      
+      console.log('Button insertion attempted. Check the DOM.');
+
     }
     
     // Helper to find the composer container from a textarea
@@ -145,25 +199,28 @@ export default defineContentScript({
     
     // Process existing textareas
     document.querySelectorAll(ALT_TEXT_SELECTOR).forEach(textarea => {
-      addGenerateButton(textarea);
+      addGenerateButton(textarea as HTMLTextAreaElement);
     });
     
     // Watch for dynamically added textareas
     const observer = new MutationObserver(mutations => {
+      console.log('MutationObserver callback triggered.'); // Log observer activity
       for (const mutation of mutations) {
         if (mutation.type === 'childList') {
           mutation.addedNodes.forEach(node => {
             // Check if the added node is an element
             if (node.nodeType === Node.ELEMENT_NODE) {
-              // Check if it's a textarea with the right aria-label
-              if (node.matches && node.matches(ALT_TEXT_SELECTOR)) {
-                addGenerateButton(node);
-              }
-              
+              const element = node as Element; // Type assertion
+              // Check if it's the textarea itself
+              if (element.matches && element.matches(ALT_TEXT_SELECTOR)) {
+                 console.log('Observer found matching textarea directly:', element);
+                 addGenerateButton(element as HTMLTextAreaElement);
+              } 
               // Check if it contains any matching textareas
-              if (node.querySelectorAll) {
-                node.querySelectorAll(ALT_TEXT_SELECTOR).forEach(textarea => {
-                  addGenerateButton(textarea);
+              else if (element.querySelectorAll) {
+                element.querySelectorAll(ALT_TEXT_SELECTOR).forEach(textarea => {
+                   console.log('Observer found matching textarea within added node:', textarea);
+                   addGenerateButton(textarea as HTMLTextAreaElement);
                 });
               }
             }

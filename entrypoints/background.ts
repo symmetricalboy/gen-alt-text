@@ -47,81 +47,110 @@ export default defineBackground(() => {
 
 By consistently applying these guidelines, you will create alt-text that is informative, concise, and helpful for users of assistive technology.`;
   
-  // Handle messages from content script
-  browser.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
-    if (message.type === 'GENERATE_ALT_TEXT') {
-      try {
-        console.log('Received alt text generation request for image:', message.imageUrl);
-        
-        // 1. Fetch the image
-        const response = await fetch(message.imageUrl);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch image: ${response.statusText}`);
+  // Listen for connections from content scripts
+  chrome.runtime.onConnect.addListener((port) => {
+    console.log(`Connection established from ${port.sender?.tab?.id ? 'tab ' + port.sender.tab.id : 'unknown source'}, name: ${port.name}`);
+
+    // Make sure it's our expected connection
+    if (port.name === "altTextGenerator") {
+      // Add a listener *for this specific port*
+      port.onMessage.addListener(async (message) => {
+        console.log('Message received via port:', message);
+
+        if (message.action === 'generateAltText') { 
+          let responsePayload = {}; // Define response payload
+          try {
+            console.log('Received alt text generation request for image:', message.imageUrl);
+            
+            // 1. Fetch the image
+            const fetchResponse = await fetch(message.imageUrl);
+            if (!fetchResponse.ok) {
+              throw new Error(`Failed to fetch image: ${fetchResponse.statusText}`);
+            }
+            const blob = await fetchResponse.blob();
+            const base64Image = await blobToBase64(blob);
+            const mimeType = blob.type;
+            console.log('Image fetched and converted to base64');
+            
+            // 2. Call Gemini API
+            const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+            const geminiRequestBody = {
+              contents: [{
+                parts: [
+                  // Use the custom instructions here
+                  { text: customInstructions }, 
+                  {
+                    inline_data: {
+                      mime_type: mimeType,
+                      data: base64Image
+                    }
+                  }
+                ]
+              }]
+            };
+            
+            const geminiResponse = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(geminiRequestBody)
+            });
+            
+            if (!geminiResponse.ok) {
+              const errorText = await geminiResponse.text();
+              throw new Error(`Gemini API error: ${geminiResponse.status} - ${errorText}`);
+            }
+            
+            const geminiData = await geminiResponse.json();
+            console.log('Gemini API response received. Data:', JSON.stringify(geminiData));
+            
+            const generatedText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
+            console.log('Extracted text:', generatedText);
+            
+            if (!generatedText) {
+              console.error('Generated text is missing from Gemini response.');
+              throw new Error('Could not extract text from Gemini response');
+            }
+            
+            // Prepare success response
+            responsePayload = { altText: generatedText.trim() };
+            console.log('Prepared successful response:', responsePayload);
+            
+          } catch (error) {
+            console.error('Error caught in alt text generation process:', error);
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+            // Prepare error response
+            responsePayload = { error: errorMessage };
+             console.log('Prepared error response:', responsePayload);
+          }
+
+          // Send the response back via the same port
+          if (port) { // Check if port still exists
+             console.log('Attempting to post response message via port:', responsePayload);
+             try {
+                port.postMessage(responsePayload);
+                console.log('Successfully posted message via port.');
+             } catch (postError) {
+                console.error('Error posting message back via port:', postError, ' Port disconnected?');
+             }
+          } else {
+            console.error('Port was disconnected before response could be sent.');
+          }
+
+        } else {
+          console.warn('Received unknown action via port:', message.action);
+          // Optionally send back an error for unknown actions
+          // port.postMessage({ error: `Unknown action: ${message.action}` });
         }
-        
-        const blob = await response.blob();
-        const base64Image = await blobToBase64(blob);
-        const mimeType = blob.type;
-        console.log('Image fetched and converted to base64');
-        
-        // 2. Call Gemini API
-        const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
-        
-        const geminiRequestBody = {
-          contents: [{
-            parts: [
-              // Use the custom instructions here
-              { text: customInstructions }, 
-              {
-                inline_data: {
-                  mime_type: mimeType,
-                  data: base64Image
-                }
-              }
-            ]
-          }]
-        };
-        
-        const geminiResponse = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(geminiRequestBody)
-        });
-        
-        if (!geminiResponse.ok) {
-          const errorText = await geminiResponse.text();
-          throw new Error(`Gemini API error: ${geminiResponse.status} - ${errorText}`);
-        }
-        
-        const geminiData = await geminiResponse.json();
-        console.log('Gemini API response received');
-        
-        // Extract the generated text
-        const generatedText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
-        
-        if (!generatedText) {
-          throw new Error('Could not extract text from Gemini response');
-        }
-        
-        // Return the alt text to the content script
-        sendResponse({
-          success: true,
-          altText: generatedText.trim()
-        });
-        
-      } catch (error) {
-        console.error('Error generating alt text:', error);
-        sendResponse({
-          success: false,
-          error: error.message || 'Unknown error occurred'
-        });
-      }
-      
-      return true; // Required for async response
-    }
-  });
+      }); // End of port.onMessage listener
+
+      // Optional: Handle disconnection from the content script side
+      port.onDisconnect.addListener(() => {
+         console.log(`Port ${port.name} disconnected.`);
+         // Clean up any resources associated with this specific port if necessary
+      });
+
+    } // End if port.name === "altTextGenerator"
+  }); // End of chrome.runtime.onConnect listener
   
   // Helper function to convert blob to base64
   function blobToBase64(blob) {
