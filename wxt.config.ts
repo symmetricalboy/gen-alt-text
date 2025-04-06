@@ -25,11 +25,11 @@ export default defineConfig({
     
     // Icons - using default ones from WXT for now
     
-    // Options
-    options_ui: {
-      page: 'options.html',
-      open_in_tab: true
-    }
+    // Options (Removed as no options page is implemented yet)
+    // options_ui: {
+    //   page: 'options.html',
+    //   open_in_tab: true
+    // }
   },
   
   // Build configuration for different browsers
