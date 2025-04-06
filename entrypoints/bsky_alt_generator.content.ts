@@ -184,20 +184,108 @@ export default defineContentScript({
     
     // Function to find media elements in the composer
     const findMediaElement = (container) => {
+      console.log('Searching for media in container:', container);
+      
+      // First try to find the most common Bluesky image container patterns
+      const mediaContainers = container.querySelectorAll(
+        // Common Bluesky image containers
+        '[data-testid="imagePreview"], ' +
+        '[data-testid="images"], ' + 
+        '.r-1p0dtai, ' +  // Common class for image containers
+        '[role="img"], ' +
+        '.css-175oi2r > div > img'  // Common parent-child pattern
+      );
+      
+      console.log('Found potential media containers:', mediaContainers.length);
+      
+      // Check media containers for actual images/videos
+      for (const mediaContainer of mediaContainers) {
+        console.log('Checking media container:', mediaContainer);
+        
+        // Check for direct img/video elements
+        const mediaElement = 
+          mediaContainer.querySelector('img:not([alt="avatar"])') || 
+          mediaContainer.querySelector('video');
+        
+        // If media container itself is an image or video
+        if (mediaContainer.tagName === 'IMG' || mediaContainer.tagName === 'VIDEO') {
+          console.log('Container itself is a media element:', mediaContainer);
+          return mediaContainer;
+        }
+        
+        if (mediaElement) {
+          console.log('Found media element within container:', mediaElement);
+          return mediaElement;
+        }
+      }
+      
+      // If not found in containers, try direct approaches
       // Try multiple methods to find media
       const mediaElement = 
-        // Look for img elements
+        // Look for img elements with specific attributes or without avatar alt
         container.querySelector('img[alt="Image preview"], img[data-testid="image-preview"], img:not([alt="avatar"])') ||
         // Look for video elements
         container.querySelector('video[data-testid="video-preview"], video') ||
         // Common class selector (backup)
         container.querySelector('.css-175oi2r img, .image-preview img') ||
+        // Look for image preview containers
+        container.querySelector('.r-1p0dtai img, [role="img"] img') ||
         // Fallback to any image element with src in the container
-        Array.from(container.querySelectorAll('img')).find(img => img.src && 
-          !img.src.includes('avatar') && 
-          !img.src.includes('logo') && 
-          img.width > 50); // Reasonable size for a content image
+        Array.from(container.querySelectorAll('img')).find(img => {
+          const src = img.src || '';
+          const alt = img.alt || '';
+          const width = parseInt(img.getAttribute('width') || img.style.width || '0');
+          const style = window.getComputedStyle(img);
+          const computedWidth = parseInt(style.width) || 0;
           
+          // Filter out avatars and small images
+          const isLargeEnough = (width > 60 || computedWidth > 60 || img.width > 60);
+          const notAvatar = !alt.includes('avatar') && 
+                           !src.includes('avatar') && 
+                           !src.includes('profile');
+          
+          const result = isLargeEnough && notAvatar && src;
+          if (result) console.log('Found potential content image by size/source filtering:', img);
+          return result;
+        });
+        
+      // Special case for Bluesky - sometimes images are nested in specific containers
+      if (!mediaElement) {
+        // Expand search to the entire document for the current post
+        const postContainer = container.closest('[data-testid="postView"]') || 
+                            container.closest('[role="article"]') ||
+                            container;
+        
+        console.log('Expanding search to post container:', postContainer);
+        
+        // Look for large images in post that aren't avatars
+        const postImages = Array.from(postContainer.querySelectorAll('img')).filter(img => {
+          if (!img.src) return false;
+          
+          // Check if this is likely a content image
+          const classList = Array.from(img.classList).join(' ');
+          const parentClasses = Array.from(img.parentElement?.classList || []).join(' ');
+          const isLargeImage = img.width > 100 || 
+                               img.height > 100 || 
+                               parentClasses.includes('r-1p0dtai') ||
+                               classList.includes('r-1p0dtai');
+          
+          // Check if not an avatar
+          const notAvatar = !img.alt?.includes('avatar') && 
+                           !img.src.includes('avatar_thumbnail') &&
+                           !img.src.includes('profile');
+          
+          const result = isLargeImage && notAvatar;
+          if (result) console.log('Found post image:', img);
+          return result;
+        });
+        
+        if (postImages.length > 0) {
+          console.log('Found image in expanded search:', postImages[0]);
+          return postImages[0];
+        }
+      }
+              
       return mediaElement;
     };
     
@@ -211,21 +299,16 @@ export default defineContentScript({
         return;
       }
 
-      // Find the parent element that likely contains the post button
+      // Find the parent element that likely contains the post button and media
       // Use a more robust approach to find the container
-      let container = textarea.closest('[data-testid="composer"], [role="dialog"], .css-175oi2r');
-      if (!container) {
-        // Fallback
-        container = textarea.parentElement?.parentElement?.parentElement; 
-        console.log('Using fallback container:', container);
-      } else {
-        console.log('Found container via closest():', container);
-      }
-
+      let container = findComposerContainer(textarea);
+      
       if (!container) {
         console.error('Could not find a suitable container for the button near textarea:', textarea);
         return;
       }
+      
+      console.log('Found container:', container);
       
       // Check if button already exists
       if (container.querySelector(`#${BUTTON_ID}`)) {
@@ -434,6 +517,77 @@ export default defineContentScript({
       textarea.dataset.geminiButtonAdded = 'true'; 
       
       console.log('Button insertion attempted. Check the DOM.');
+    }
+    
+    // Helper function to find the composer container from a textarea
+    function findComposerContainer(element) {
+      console.log('Finding composer container for element:', element);
+      
+      // First try attribute-based selectors
+      const container = element.closest('[data-testid="composer"], [role="dialog"], .css-175oi2r');
+      if (container) {
+        console.log('Found container via closest() with attributes:', container);
+        return container;
+      }
+      
+      // Walk up the DOM to find the composer container
+      let current = element;
+      let maxDepth = 10; // Avoid infinite loops
+      
+      // First, find an element that might be the alt text entry dialog/panel
+      while (current && current.tagName !== 'BODY' && maxDepth > 0) {
+        // Check for Bluesky's alt text modal/dialog
+        const isAltTextContainer = 
+          (current.querySelector('[aria-label="Alt text"]') === element) ||
+          (current.getAttribute('role') === 'dialog') ||
+          (current.classList.contains('css-175oi2r') && 
+           current.querySelector('button[aria-label="Close"], button[aria-label="Cancel"]'));
+        
+        if (isAltTextContainer) {
+          console.log('Found potential alt text container:', current);
+          
+          // If this is a dialog/panel, the composer might be the parent container
+          const composer = current.parentElement?.closest('[data-testid="composer"], [role="article"]');
+          if (composer) {
+            console.log('Found composer from alt text container:', composer);
+            return composer;
+          }
+          
+          // If no specific composer found, use this container
+          return current;
+        }
+        
+        maxDepth--;
+        current = current.parentElement;
+      }
+      
+      // If no specific container found, fall back to parent hierarchy
+      current = element;
+      // Look for a parent with specific characteristics
+      let composerParent = null;
+      for (let i = 0; i < 6; i++) { // Check up to 6 levels up
+        if (!current || current.tagName === 'BODY') break;
+        
+        current = current.parentElement;
+        
+        // Check if this might be a composer container
+        if (current) {
+          // Check for elements that suggest this is a composer
+          const hasActionButtons = !!current.querySelector('button[aria-label="Post"], button[type="submit"]');
+          const isLikelyComposer = current.getAttribute('role') === 'dialog' || 
+                                 hasActionButtons || 
+                                 current.querySelector('textarea') ||
+                                 current.classList.contains('css-175oi2r');
+          
+          if (isLikelyComposer) {
+            composerParent = current;
+            console.log('Found likely composer parent:', composerParent);
+            break;
+          }
+        }
+      }
+      
+      return composerParent || element.parentElement?.parentElement?.parentElement; 
     }
     
     // Watch for media uploads to trigger auto-generation
