@@ -531,18 +531,16 @@ export default defineContentScript({
       console.log('Finding composer container for element:', element);
       
       // Priority 1: Find the closest modal dialog containing the element
-      // This is the most reliable container for alt text + image preview in Bluesky
       const modalDialog = element.closest('[role="dialog"][aria-modal="true"]');
       if (modalDialog) {
         console.log('Found modal dialog container:', modalDialog);
-        // Optional: Verify it also contains some form of image area, though usually the modal is correct
-        const hasImageArea = modalDialog.querySelector('[data-testid*="image"], [role="img"], .r-1p0dtai');
-        if (hasImageArea) {
-           console.log('Modal dialog contains an image area, returning it.');
+        // Quick check if it seems valid (contains the element and potentially image area)
+        if (modalDialog.contains(element) && modalDialog.querySelector('[data-testid*="image"], [role="img"], .r-1p0dtai, textarea[aria-label="Alt text"]')) {
+           console.log('Modal dialog seems valid, returning it.');
            return modalDialog;
         } else {
-           console.warn('Modal dialog found, but no image area detected within it. Returning dialog anyway.');
-           return modalDialog; // Still likely the best container
+           console.warn('Modal dialog found, but structure seems unexpected. Continuing search...');
+           // Don't return modalDialog yet if it doesn't seem right
         }
       }
       
@@ -550,35 +548,47 @@ export default defineContentScript({
       const testIdComposer = element.closest('[data-testid="composer"]');
       if (testIdComposer) {
         console.log('Found container via data-testid="composer":', testIdComposer);
-        // Verify this container seems plausible (e.g., contains action buttons)
-        if (testIdComposer.querySelector('button[aria-label*="Post"], button[type="submit"]')) {
+        // Verify this container seems plausible (e.g., contains the element and other composer items)
+        if (testIdComposer.contains(element) && testIdComposer.querySelector('button[aria-label*="Post"], button[type="submit"], [data-testid*="image"]')) {
            console.log('Composer with test ID seems valid.');
            return testIdComposer;
         }
-         console.warn('Found data-testid="composer", but it lacks expected elements. Continuing search...');
+         console.warn('Found data-testid="composer", but structure seems unexpected. Continuing search...');
       }
       
-      // Priority 3: Fallback - Walk up looking for a plausible container with an image
-      console.log('Modal or testid composer not found directly. Walking up DOM...');
+      // Priority 3: Strict Fallback - Walk up looking for the *lowest* common ancestor
+      // containing BOTH the original element and a likely image preview element.
+      console.log('Modal or testid composer not found directly. Walking up DOM for common ancestor...');
       let current = element.parentElement;
       let maxDepth = 10;
+      let commonAncestor = null;
+      const imagePreviewSelector = '[data-testid="imagePreview"] img, .r-1p0dtai img, [role="img"] img:not([alt*="avatar"])'; // Target only likely preview images
+
       while (current && current.tagName !== 'BODY' && maxDepth > 0) {
-          // Check if this level contains an image preview element
-          const containsMediaPreview = !!current.querySelector('[data-testid*="image"] img, .r-1p0dtai img, [role="img"] img, video');
-          // Check if it looks like a general container or card
-          const isPlausibleContainer = current.matches('.css-175oi2r, [role="article"], [style*="flex-direction"]');
-          
-          if (containsMediaPreview && isPlausibleContainer) {
-              console.log('Found plausible container with media preview by walking up:', current);
-              return current; // Return the first plausible parent with media
+          // Check if this level contains BOTH the original element AND a specific image preview
+          if (current.contains(element) && current.querySelector(imagePreviewSelector)) {
+              console.log('Found potential common ancestor with image preview:', current);
+              commonAncestor = current; // Store this level as a potential candidate
+              // Check if the *parent* also contains both. If not, this 'current' is the lowest common ancestor.
+              const parent = current.parentElement;
+              if (!parent || parent.tagName === 'BODY' || !parent.contains(element) || !parent.querySelector(imagePreviewSelector)) {
+                 console.log('Parent does not contain both, selecting current as lowest common ancestor:', commonAncestor);
+                 break; // Found the boundary
+              }
+              // If parent also contains both, continue up to find the *actual* lowest
           }
           maxDepth--;
           current = current.parentElement;
       }
+      
+      if (commonAncestor) {
+          console.log('Returning lowest common ancestor found:', commonAncestor);
+          return commonAncestor;
+      }
 
-      // Last Resort: Return a few levels up from the original element
-      console.error('Could not reliably determine the composer container. Using fallback parent.');
-      return element.parentElement?.parentElement?.parentElement || element.parentElement; 
+      // Last Resort: If absolutely nothing worked, use the modal if found initially, otherwise a simple parent
+      console.error('Could not find a reliable common ancestor. Using initial modal or fallback parent.');
+      return modalDialog || element.parentElement?.parentElement || element.parentElement; 
     }
     
     // Watch for media uploads to trigger auto-generation
