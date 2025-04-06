@@ -336,53 +336,64 @@ export default defineContentScript({
     
     // Add the button to an alt text textarea
     function addGenerateButton(textarea) {
-      console.log('addGenerateButton called for textarea:', textarea); 
+      console.log('[addGenerateButton] Starting for textarea:', textarea);
 
       // Prevent adding multiple buttons
       if (textarea.dataset.geminiButtonAdded === 'true') {
-        console.log('Button already added to this textarea, skipping.');
+        console.log('[addGenerateButton] Button already added, skipping.');
         return;
       }
 
-      // Find the parent element that likely contains the post button and media
-      // Use a more robust approach to find the container
-      let container = findComposerContainer(textarea);
-      
-      if (!container) {
-        console.error('Could not find a suitable container for the button near textarea:', textarea);
-        return;
+      // --- Find the Shared Parent Container ---
+      // Based on the structure: textarea -> textAreaContainer -> sharedParentContainer
+      const textAreaContainer = textarea.parentElement;
+      let container; // Define container variable
+      const sharedParentContainer = textAreaContainer?.parentElement;
+
+      if (!sharedParentContainer) {
+          console.error('[addGenerateButton] Could not find expected sharedParentContainer (parent of textarea's parent). Cannot proceed.');
+          // As a fallback, try the complex container finder just in case structure changed slightly
+          const fallbackContainer = findComposerContainer(textarea);
+          if (!fallbackContainer) {
+              console.error('[addGenerateButton] Fallback container finder also failed.');
+              return;
+          }
+          console.warn('[addGenerateButton] Using fallback container:', fallbackContainer);
+          // If using fallback, we proceed but might face the same issues as before
+          // Reassign container for the rest of the function
+          container = fallbackContainer;
+      } else {
+           console.log('[addGenerateButton] Found sharedParentContainer:', sharedParentContainer);
+           // Use this specifically found container for the rest of the operations
+           container = sharedParentContainer;
       }
-      
-      console.log('Found container:', container);
-      
-      // Check if button already exists
+
+
+      // Check if button already exists within the determined container
       if (container.querySelector(`#${BUTTON_ID}`)) {
-        console.log('Button already exists in this container, skipping.');
+        console.log('[addGenerateButton] Button already exists in this container, skipping.');
         return;
       }
 
-      // Create the button container for positioning
+      // Create the button container for positioning (append near textarea)
       const buttonContainer = document.createElement('div');
       buttonContainer.style.display = 'flex';
       buttonContainer.style.alignItems = 'center';
       buttonContainer.style.gap = '8px';
       buttonContainer.style.marginLeft = '8px';
-      
+
+
       // Create the button with an icon
       const button = document.createElement('button');
       button.id = BUTTON_ID;
-      button.title = 'Generate Alt Text'; // Add tooltip
-      
-      // Use an SVG directly in the button for reliability
+      button.title = 'Generate Alt Text';
       button.innerHTML = `
         <svg width="20" height="20" viewBox="-5 -10 128 128" xmlns="http://www.w3.org/2000/svg">
-          <path d="M 35.746,4 C 20.973,4 9,15.973 9,30.746 V 77.254 C 9,92.027 20.973,104 35.746,104 H 82.254 C 97.027,104 109,92.027 109,77.254 V 30.746 C 109,15.973 97.027,4 82.254,4 Z m -19.77,26.746 c 0,-10.918 8.8516,-19.77 19.77,-19.77 h 46.508 c 10.918,0 19.77,8.8516 19.77,19.77 v 46.508 c 0,10.918 -8.8516,19.77 -19.77,19.77 H 35.746 c -10.918,0 -19.77,-8.8516 -19.77,-19.77 z m 45.609,0.37891 c -1.082,-2.1055 -4.0898,-2.1055 -5.1719,0 l -4.3242,8.4219 c -1.668,3.2383 -4.3047,5.875 -7.543,7.543 l -8.4219,4.3242 c -2.1055,1.082 -2.1055,4.0898 0,5.1719 l 8.4219,4.3242 c 3.2383,1.668 5.875,4.3047 7.543,7.543 l 4.3242,8.4219 c 1.082,2.1055 4.0898,2.1055 5.1719,0 l 4.3242,-8.4219 c 1.668,-3.2383 4.3047,-5.875 7.543,-7.543 l 8.4219,-4.3242 c 2.1055,-1.082 2.1055,-4.0898 0,-5.1719 l -8.4219,-4.3242 c -3.2383,-1.668 -5.875,-4.3047 -7.543,-7.543 z" 
+          <path d="M 35.746,4 C 20.973,4 9,15.973 9,30.746 V 77.254 C 9,92.027 20.973,104 35.746,104 H 82.254 C 97.027,104 109,92.027 109,77.254 V 30.746 C 109,15.973 97.027,4 82.254,4 Z m -19.77,26.746 c 0,-10.918 8.8516,-19.77 19.77,-19.77 h 46.508 c 10.918,0 19.77,8.8516 19.77,19.77 v 46.508 c 0,10.918 -8.8516,19.77 -19.77,19.77 H 35.746 c -10.918,0 -19.77,-8.8516 -19.77,-19.77 z m 45.609,0.37891 c -1.082,-2.1055 -4.0898,-2.1055 -5.1719,0 l -4.3242,8.4219 c -1.668,3.2383 -4.3047,5.875 -7.543,7.543 l -8.4219,4.3242 c -2.1055,1.082 -2.1055,4.0898 0,5.1719 l 8.4219,4.3242 c 3.2383,1.668 5.875,4.3047 7.543,7.543 l 4.3242,8.4219 c 1.082,2.1055 4.0898,2.1055 5.1719,0 l 4.3242,-8.4219 c 1.668,-3.2383 4.3047,-5.875 7.543,-7.543 l 8.4219,-4.3242 c 2.1055,-1.082 2.1055,-4.0898 0,-5.1719 l -8.4219,-4.3242 c -3.2383,-1.668 -5.875,-4.3047 -7.543,-7.543 z"
              fill="#323248" stroke="none" />
         </svg>
       `;
-      
-      // Style the button
-      button.style.marginLeft = '8px'; 
+      button.style.marginLeft = '8px';
       button.style.padding = '4px';
       button.style.cursor = 'pointer';
       button.style.border = '1px solid #ccc';
@@ -394,12 +405,9 @@ export default defineContentScript({
       button.style.setProperty('visibility', 'visible', 'important');
       button.style.setProperty('z-index', '9999', 'important');
       button.style.setProperty('position', 'relative', 'important');
-      
-      console.log('Button element created:', button);
 
-      // Store the original SVG to restore it later
       const originalButtonContent = button.innerHTML;
-      
+
       // Create auto-mode toggle
       const autoToggle = document.createElement('label');
       autoToggle.className = 'gemini-auto-toggle';
@@ -408,7 +416,7 @@ export default defineContentScript({
       autoToggle.style.alignItems = 'center';
       autoToggle.style.fontSize = '12px';
       autoToggle.style.cursor = 'pointer';
-      
+
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.style.margin = '0 4px 0 0';
@@ -417,10 +425,10 @@ export default defineContentScript({
         config.autoMode = e.target.checked;
         safeChrome.storage.sync.set({ autoMode: config.autoMode });
       });
-      
+
       autoToggle.appendChild(checkbox);
       autoToggle.appendChild(document.createTextNode('Auto'));
-      
+
       buttonContainer.appendChild(button);
       buttonContainer.appendChild(autoToggle);
 
@@ -430,138 +438,128 @@ export default defineContentScript({
         button.textContent = 'Connecting...'; // Update initial state
         button.disabled = true;
 
-        // Find the media element (image or video)
+        // Find the media element (image or video) *within the specific container*
+        // **CRITICAL CHANGE**: Pass the specific `container` found earlier
         const mediaElement = findMediaElement(container);
-        console.log('Media element found:', mediaElement);
+        console.log('[generateAltText] Media element found within container:', mediaElement); // Changed log
 
         if (!mediaElement || !mediaElement.src) {
-          console.error('Could not find media element or its src.');
-          button.textContent = 'Error: No Media';
-          setTimeout(() => {
-            button.textContent = '';
-            button.innerHTML = originalButtonContent;
-            button.disabled = false;
-          }, 2000);
-          return;
-        }
+            console.error('[generateAltText] Could not find media element or its src within the designated container.');
+            button.textContent = 'Error: No Media Found'; // More specific error
+            setTimeout(() => {
+              button.textContent = '';
+              button.innerHTML = originalButtonContent;
+              button.disabled = false;
+            }, 2000);
+            return;
+          }
 
-        const mediaUrl = mediaElement.src;
-        const isVideo = mediaElement.tagName.toLowerCase() === 'video';
-        console.log(`${isVideo ? 'Video' : 'Image'} URL:`, mediaUrl);
+          const mediaUrl = mediaElement.src;
+          const isVideo = mediaElement.tagName.toLowerCase() === 'video';
+          console.log(`[generateAltText] ${isVideo ? 'Video' : 'Image'} URL:`, mediaUrl);
 
-        try {
-          console.log('Establishing connection to background script...');
-          const port = safeChrome.runtime.connect({ name: "altTextGenerator" });
-          console.log('Connection established.');
-          button.textContent = 'Generating...'; // Update state
+          try {
+            console.log('[generateAltText] Establishing connection to background script...');
+            const port = safeChrome.runtime.connect({ name: "altTextGenerator" });
+            console.log('[generateAltText] Connection established.');
+            button.textContent = 'Generating...'; // Update state
 
-          // Listener for responses from the background script via this port
-          port.onMessage.addListener((response) => {
-            console.log('Message received from background via port:', response);
+            port.onMessage.addListener((response) => {
+              console.log('[generateAltText] Message received from background via port:', response);
 
-            if (response.altText) {
-              textarea.value = response.altText;
-              textarea.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-              console.log('Alt text inserted.');
-              button.textContent = '✓ Done';
-              
-              // Show toast if enabled
-              if (config.showToasts) {
-                createToast('Alt text generated! Please review for accuracy before posting.', 'success');
+              if (response.altText) {
+                textarea.value = response.altText;
+                textarea.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                console.log('[generateAltText] Alt text inserted.');
+                button.textContent = '✓ Done';
+
+                if (config.showToasts) {
+                  createToast('Alt text generated! Please review for accuracy before posting.', 'success');
+                }
+
+                setTimeout(() => {
+                  button.textContent = '';
+                  button.innerHTML = originalButtonContent;
+                  button.disabled = false;
+                }, 1500);
+              } else if (response.error) {
+                console.error('[generateAltText] Error generating alt text:', response.error);
+                button.textContent = `Error: ${response.error.substring(0,20)}...`;
+
+                if (config.showToasts) {
+                  createToast(`Error: ${response.error}`, 'error');
+                }
+
+                setTimeout(() => {
+                  button.textContent = '';
+                  button.innerHTML = originalButtonContent;
+                  button.disabled = false;
+                }, 3000);
+              } else {
+                console.error('[generateAltText] Received unexpected message format from background:', response);
+                button.textContent = 'Msg Format Error';
+                setTimeout(() => {
+                  button.textContent = '';
+                  button.innerHTML = originalButtonContent;
+                  button.disabled = false;
+                }, 2000);
               }
-              
-              setTimeout(() => {
-                // Restore the icon after completion
-                button.textContent = '';
-                button.innerHTML = originalButtonContent;
-                button.disabled = false;
-              }, 1500);
-            } else if (response.error) {
-              console.error('Error generating alt text:', response.error);
-              button.textContent = `Error: ${response.error.substring(0,20)}...`;
-              
-              if (config.showToasts) {
-                createToast(`Error: ${response.error}`, 'error');
+              // Ensure disconnect happens *after* processing the message
+              port.disconnect(); 
+            });
+
+            port.onDisconnect.addListener(() => {
+              console.error('[generateAltText] Background port disconnected unexpectedly.', chrome.runtime.lastError || '(No error info)');
+              if (!button.textContent.includes('Done') && !button.textContent.includes('Error')) {
+                button.textContent = 'Disconnect Error';
+                setTimeout(() => {
+                  button.textContent = '';
+                  button.innerHTML = originalButtonContent;
+                  button.disabled = false;
+                }, 3000);
               }
-              
-              setTimeout(() => {
-                // Restore the icon after error
-                button.textContent = '';
-                button.innerHTML = originalButtonContent;
-                button.disabled = false;
-              }, 3000);
-            } else {
-              // Handle unexpected message format
-              console.error('Received unexpected message format from background:', response);
-              button.textContent = 'Msg Format Error';
-              setTimeout(() => {
-                // Restore the icon after error
-                button.textContent = '';
-                button.innerHTML = originalButtonContent;
-                button.disabled = false;
-              }, 2000);
-            }
-            port.disconnect(); // Disconnect after receiving the response
-          });
+            });
 
-          // Listener for when the connection is disconnected unexpectedly
-          port.onDisconnect.addListener(() => {
-            console.error('Background port disconnected unexpectedly.', chrome.runtime.lastError || '(No error info)');
-            // Only update button if it hasn't already shown success/error
-            if (!button.textContent.includes('Done') && !button.textContent.includes('Error')) {
-              button.textContent = 'Disconnect Error';
-              setTimeout(() => {
-                // Restore the icon after error
-                button.textContent = '';
-                button.innerHTML = originalButtonContent;
-                button.disabled = false;
-              }, 3000);
-            }
-          });
+            console.log('[generateAltText] Sending message via port...');
+            port.postMessage({
+              action: 'generateAltText',
+              imageUrl: mediaUrl,
+              isVideo: isVideo
+            });
+            console.log('[generateAltText] Message sent via port.');
 
-          // Send the message to the background script via the port
-          console.log('Sending message via port...');
-          port.postMessage({ 
-            action: 'generateAltText', 
-            imageUrl: mediaUrl,
-            isVideo: isVideo 
-          });
-          console.log('Message sent via port.');
-
-        } catch (error) {
-          // Catch errors related to establishing the connection itself
-          console.error('Error establishing connection or posting initial message:', error);
-          button.textContent = 'Connect Error';
-          setTimeout(() => {
-            // Restore the icon after error
-            button.textContent = '';
-            button.innerHTML = originalButtonContent;
-            button.disabled = false;
-          }, 2000);
-        }
+          } catch (error) {
+            console.error('[generateAltText] Error establishing connection or posting initial message:', error);
+            button.textContent = 'Connect Error';
+            setTimeout(() => {
+              button.textContent = '';
+              button.innerHTML = originalButtonContent;
+              button.disabled = false;
+            }, 2000);
+          }
       };
 
       // Button click handler
       button.onclick = async (e) => {
-        e.preventDefault(); 
-        e.stopPropagation(); 
-        console.log('Generate Alt Text button clicked');
+        e.preventDefault();
+        e.stopPropagation();
+        console.log('[addGenerateButton] Generate Alt Text button clicked');
         await generateAltText();
       };
 
-      // Append the button container - Try appending as the last child of the parent
-      const parent = textarea.parentNode;
-      if (parent) {
-        console.log('Attempting to append button container to parent:', parent);
-        parent.appendChild(buttonContainer);
+      // Append the button container near the textarea
+      // Use textAreaContainer (the direct parent) for button placement
+      if (textAreaContainer) {
+        console.log('[addGenerateButton] Attempting to append button container to textAreaContainer:', textAreaContainer);
+        textAreaContainer.appendChild(buttonContainer); // Append button near textarea
       } else {
-        console.error('Could not find parent node to append button to.');
+        console.error('[addGenerateButton] Could not find textAreaContainer to append button to.');
       }
-      
+
       // Mark the textarea so we don't add the button again
-      textarea.dataset.geminiButtonAdded = 'true'; 
-      
-      console.log('Button insertion attempted. Check the DOM.');
+      textarea.dataset.geminiButtonAdded = 'true';
+
+      console.log('[addGenerateButton] Button insertion attempted.');
     }
     
     // Helper function to find the composer container from a textarea or any element within it
