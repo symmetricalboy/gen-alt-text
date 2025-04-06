@@ -8,7 +8,7 @@ export default defineBackground(() => {
   }
   
   // Store the custom instructions
-  const customInstructions = `You will be provided with images. For each image, your task is to generate alternative text (alt-text) that describes the image's content and context. This alt-text is intended for use with screen reader technology, assisting individuals who are blind or visually impaired to understand the image. Adhere to the following guidelines strictly:
+  const imageInstructions = `You will be provided with images. For each image, your task is to generate alternative text (alt-text) that describes the image's content and context. This alt-text is intended for use with screen reader technology, assisting individuals who are blind or visually impaired to understand the image. Adhere to the following guidelines strictly:
 
 1.  **Content and Purpose:**
     *   Describe the image's content accurately and thoroughly. Explain the image in the context that it is presented.
@@ -46,6 +46,42 @@ export default defineBackground(() => {
     * Do not repeat information that already exists in adjacent text.
 
 By consistently applying these guidelines, you will create alt-text that is informative, concise, and helpful for users of assistive technology.`;
+
+  // Store video-specific instructions
+  const videoInstructions = `You will be provided with a video thumbnail image. Your task is to generate alternative text (alt-text) that describes the video's content and context based on this thumbnail. This alt-text is intended for use with screen reader technology, assisting individuals who are blind or visually impaired to understand what the video is about. Adhere to the following guidelines strictly:
+
+1.  **Video Thumbnail Content:**
+    *   Describe what can be seen in the video thumbnail accurately and thoroughly.
+    *   Mention that this is a "video thumbnail" at the beginning of your description.
+    *   If the thumbnail shows a frame from the video, describe the scene, setting, people, and any visible action.
+    *   If the thumbnail has a custom cover image or title card, describe that and indicate it's a cover image.
+
+2.  **Text within the Thumbnail:**
+    *   If the thumbnail contains text such as a title, caption, or other information, transcribe this text *verbatim* within the alt-text.
+    *   Example: 'Video thumbnail showing a cooking demonstration with text overlay reading, "5-Minute Pasta Recipe".'
+    *   Indicate that this is a direct quote by using quotation marks.
+
+3.  **Brevity and Clarity:**
+    *   Keep descriptions concise, ideally under 100-125 characters where possible, *except* when transcribing text within the thumbnail.
+    *   Use clear, simple language. Avoid jargon or overly technical terms unless they are essential.
+    *   Use proper grammar, punctuation, and capitalization. End sentences with a period.
+
+4.  **Notable Individuals:**
+    *   If the thumbnail shows recognizable people, identify them by name if possible. Example: "Video thumbnail featuring Taylor Swift performing on stage."
+
+5.  **Indicators of Video Content:**
+    *   Note any visual cues that indicate the video's content or genre (e.g., play button overlay, duration indicator, channel name).
+    *   If the thumbnail gives clear indication of what the video contains, include that information.
+
+6.  **Output Format:**
+    *   Provide *only* the video thumbnail description. Do not include any introductory phrases, conversational elements, or follow-up statements. Output *just* the descriptive text.
+
+7. **Do Not's:**
+    * Do not speculate extensively about what might be in the full video beyond what is visible in the thumbnail.
+    * Do not add additional information that is not directly shown within the thumbnail.
+    * Do not repeat information that already exists in adjacent text.
+
+By consistently applying these guidelines, you will create alt-text for video thumbnails that is informative, concise, and helpful for users of assistive technology.`;
   
   // Listen for connections from content scripts
   chrome.runtime.onConnect.addListener((port) => {
@@ -60,25 +96,26 @@ By consistently applying these guidelines, you will create alt-text that is info
         if (message.action === 'generateAltText') { 
           let responsePayload = {}; // Define response payload
           try {
-            console.log('Received alt text generation request for image:', message.imageUrl);
+            console.log('Received alt text generation request for media:', message.imageUrl);
+            console.log('Is video?', message.isVideo);
             
             // 1. Fetch the image
             const fetchResponse = await fetch(message.imageUrl);
             if (!fetchResponse.ok) {
-              throw new Error(`Failed to fetch image: ${fetchResponse.statusText}`);
+              throw new Error(`Failed to fetch media: ${fetchResponse.statusText}`);
             }
             const blob = await fetchResponse.blob();
             const base64Image = await blobToBase64(blob);
             const mimeType = blob.type;
-            console.log('Image fetched and converted to base64');
+            console.log('Media fetched and converted to base64');
             
-            // 2. Call Gemini API
+            // 2. Call Gemini API with appropriate instructions based on media type
             const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
             const geminiRequestBody = {
               contents: [{
                 parts: [
-                  // Use the custom instructions here
-                  { text: customInstructions }, 
+                  // Use the appropriate instructions based on media type
+                  { text: message.isVideo ? videoInstructions : imageInstructions }, 
                   {
                     inline_data: {
                       mime_type: mimeType,

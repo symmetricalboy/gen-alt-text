@@ -1,6 +1,4 @@
-import './style.css';
-
-document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
+(function(){const s=document.createElement("link").relList;if(s&&s.supports&&s.supports("modulepreload"))return;for(const e of document.querySelectorAll('link[rel="modulepreload"]'))c(e);new MutationObserver(e=>{for(const t of e)if(t.type==="childList")for(const r of t.addedNodes)r.tagName==="LINK"&&r.rel==="modulepreload"&&c(r)}).observe(document,{childList:!0,subtree:!0});function i(e){const t={};return e.integrity&&(t.integrity=e.integrity),e.referrerPolicy&&(t.referrerPolicy=e.referrerPolicy),e.crossOrigin==="use-credentials"?t.credentials="include":e.crossOrigin==="anonymous"?t.credentials="omit":t.credentials="same-origin",t}function c(e){if(e.ep)return;e.ep=!0;const t=i(e);fetch(e.href,t)}})();try{}catch(o){console.error("[wxt] Failed to initialize plugins",o)}document.querySelector("#app").innerHTML=`
   <div>
     <div class="app-icon-container">
       <svg width="48" height="48" viewBox="-5 -10 128 128" xmlns="http://www.w3.org/2000/svg">
@@ -48,23 +46,4 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <p class="copyright">Copyright © 2025 Dylan Gregori Singer (symmetricalboy)</p>
     </div>
   </div>
-`;
-
-// Load saved options
-chrome.storage.sync.get(['autoMode', 'showToasts'], (result) => {
-  const autoModeToggle = document.getElementById('autoMode') as HTMLInputElement;
-  const showToastsToggle = document.getElementById('showToasts') as HTMLInputElement;
-  
-  // Set initial toggle states
-  if (result.autoMode !== undefined) autoModeToggle.checked = result.autoMode;
-  if (result.showToasts !== undefined) showToastsToggle.checked = result.showToasts;
-  
-  // Add change listeners
-  autoModeToggle.addEventListener('change', () => {
-    chrome.storage.sync.set({ autoMode: autoModeToggle.checked });
-  });
-  
-  showToastsToggle.addEventListener('change', () => {
-    chrome.storage.sync.set({ showToasts: showToastsToggle.checked });
-  });
-});
+`;chrome.storage.sync.get(["autoMode","showToasts"],o=>{const s=document.getElementById("autoMode"),i=document.getElementById("showToasts");o.autoMode!==void 0&&(s.checked=o.autoMode),o.showToasts!==void 0&&(i.checked=o.showToasts),s.addEventListener("change",()=>{chrome.storage.sync.set({autoMode:s.checked})}),i.addEventListener("change",()=>{chrome.storage.sync.set({showToasts:i.checked})})});
