@@ -203,3 +203,37 @@ By consistently applying these guidelines, you will create alt-text for video th
     });
   }
 }); 
+
+// --- START: Add general message listener ---
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  console.log('General message received:', message, 'from sender:', sender);
+
+  if (message.type === 'MEDIA_INTERCEPTED') {
+    console.log('Received intercepted media data:');
+    console.log(`  Filename: ${message.payload?.filename}`);
+    console.log(`  Type: ${message.payload?.filetype}`);
+    console.log(`  Size: ${message.payload?.size} bytes`);
+    // You can access the base64 data URL via message.payload.dataUrl
+    // console.log(`  Data URL (first 100 chars): ${message.payload?.dataUrl?.substring(0, 100)}...`); 
+    
+    // TODO: Decide what to do with the intercepted media data.
+    // - Store it?
+    // - Trigger alt text generation immediately?
+    // - Wait for user action?
+    
+    // Example: Send a simple acknowledgement back (optional)
+    sendResponse({ status: 'Received media', filename: message.payload?.filename });
+    
+    // Return true to indicate you wish to send a response asynchronously
+    // (Needed if you were doing async work here before sending response)
+    // return true; 
+  } else {
+    console.log('Received message of unknown type:', message.type);
+    // Optionally send a response for unhandled message types
+    // sendResponse({ status: 'Unknown message type' });
+  }
+  
+  // Return false or undefined if not sending an asynchronous response.
+  return false; 
+});
+// --- END: Add general message listener --- 

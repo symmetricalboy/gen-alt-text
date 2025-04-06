@@ -19,6 +19,14 @@ export default defineContentScript({
     const ALT_TEXT_SELECTOR = ALT_TEXT_SELECTORS.join(',');
     const BUTTON_ID = 'gemini-alt-text-button';
     
+    // --- START: New selectors and file handling logic ---
+    // Selectors - these might need adjustment based on bsky.app's actual structure
+    const COMPOSER_SELECTOR = '[data-testid="composer"]'; // Assuming a general composer container
+    const FILE_INPUT_SELECTOR = `${COMPOSER_SELECTOR} input[type="file"][aria-label*="media" i]`; // More specific input selector
+    const DROP_ZONE_SELECTOR = COMPOSER_SELECTOR; // Assuming the whole composer is the drop zone
+
+    // --- END: New selectors and file handling logic ---
+    
     // Configuration (will be controlled by popup)
     let config = {
       autoMode: false,
@@ -98,6 +106,61 @@ export default defineContentScript({
       if (changes.showToasts) config.showToasts = changes.showToasts.newValue;
       console.log('Updated config:', config);
     });
+    
+    // --- START: Function to handle and send files ---
+    const handleFiles = (files) => {
+      if (!files || files.length === 0) {
+        return;
+      }
+      console.log(`Intercepted ${files.length} file(s)`);
+
+      for (const file of files) {
+        // Basic filtering - can be expanded (e.g., check config if only images are needed)
+        if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+           console.log(`Skipping non-media file: ${file.name} (${file.type})`);
+           continue;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const base64Data = e.target?.result;
+          if (typeof base64Data === 'string') {
+             console.log(`Read file ${file.name} (${file.type}), sending to background...`);
+             // Send data to background script
+             try {
+                // Use existing safeChrome helper if available, otherwise direct call
+                const runtime = (typeof safeChrome !== 'undefined' && safeChrome.runtime) ? safeChrome.runtime : chrome?.runtime;
+                if (runtime?.sendMessage) {
+                    runtime.sendMessage({
+                      type: 'MEDIA_INTERCEPTED',
+                      payload: {
+                        filename: file.name,
+                        filetype: file.type,
+                        dataUrl: base64Data, // Base64 data URL
+                        size: file.size
+                      }
+                    });
+                    // Optionally show a toast
+                    if (config.showToasts) {
+                       createToast(`Captured ${file.name}`, 'info', 2000);
+                    }
+                } else {
+                   console.error('Cannot send message: chrome.runtime.sendMessage not available.');
+                }
+             } catch (error) {
+                console.error('Error sending message to background script:', error);
+             }
+          } else {
+             console.error(`Failed to read file ${file.name} as Base64 Data URL.`);
+          }
+        };
+        reader.onerror = (e) => {
+          console.error(`Error reading file ${file.name}:`, e);
+        };
+        reader.readAsDataURL(file); // Read as Base64 Data URL
+      }
+    };
+    // --- END: Function to handle and send files ---
     
     // Toast notification system
     const createToast = (message, type = 'info', duration = 5000) => {
@@ -351,7 +414,7 @@ export default defineContentScript({
       const sharedParentContainer = textAreaContainer?.parentElement;
 
       if (!sharedParentContainer) {
-          console.error('[addGenerateButton] Could not find expected sharedParentContainer (parent of textarea's parent). Cannot proceed.');
+          console.error('[addGenerateButton] Could not find expected sharedParentContainer (parent of textarea\'s parent). Cannot proceed.');
           // As a fallback, try the complex container finder just in case structure changed slightly
           const fallbackContainer = findComposerContainer(textarea);
           if (!fallbackContainer) {
@@ -468,6 +531,7 @@ export default defineContentScript({
               console.log('[generateAltText] Message received from background via port:', response);
 
               if (response.altText) {
+                // Handle success
                 textarea.value = response.altText;
                 textarea.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
                 console.log('[generateAltText] Alt text inserted.');
@@ -483,18 +547,20 @@ export default defineContentScript({
                   button.disabled = false;
                 }, 1500);
               } else if (response.error) {
+                // Handle error from background
                 console.error('[generateAltText] Error generating alt text:', response.error);
-                button.textContent = `Error: ${response.error.substring(0,20)}...`;
+                button.textContent = `Error: ${response.error.substring(0, 20)}...`; // Use template literal
 
                 if (config.showToasts) {
-                  createToast(`Error: ${response.error}`, 'error');
+                  createToast(`Error: ${response.error}`, 'error'); // Use template literal
                 }
 
+                // Carefully rewritten setTimeout
                 setTimeout(() => {
                   button.textContent = '';
                   button.innerHTML = originalButtonContent;
                   button.disabled = false;
-                }, 3000);
+                }, 3000); // Ensure this is just the number 3000
               } else {
                 console.error('[generateAltText] Received unexpected message format from background:', response);
                 button.textContent = 'Msg Format Error';
@@ -572,7 +638,7 @@ export default defineContentScript({
         console.log('[findComposerContainer] Found potential modal dialog:', modalDialog);
         // Check if it seems valid (contains the element AND either image preview OR post button)
         if (modalDialog.contains(element) &&
-            (modalDialog.querySelector('[data-testid="imagePreview"], [data-testid="images"]') ||
+            (modalDialog.querySelector('[data-testid="imagePreview"]') || modalDialog.querySelector('[data-testid="images"]') ||
              modalDialog.querySelector('button[aria-label*="Post"], button[type="submit"]'))) {
            console.log('[findComposerContainer] Returning: Priority 1 - Valid Modal Dialog');
            return modalDialog;
@@ -590,7 +656,7 @@ export default defineContentScript({
         console.log('[findComposerContainer] Found potential data-testid="composer":', testIdComposer);
         // Check if it seems valid (contains the element AND either image preview OR post button)
         if (testIdComposer.contains(element) &&
-            (testIdComposer.querySelector('[data-testid="imagePreview"], [data-testid="images"]') ||
+            (testIdComposer.querySelector('[data-testid="imagePreview"]') || testIdComposer.querySelector('[data-testid="images"]') ||
              testIdComposer.querySelector('button[aria-label*="Post"], button[type="submit"]'))) {
            console.log('[findComposerContainer] Returning: Priority 2 - Valid Test ID Composer');
            return testIdComposer;
@@ -755,5 +821,107 @@ export default defineContentScript({
     // Start observing
     observer.observe(document.body, { childList: true, subtree: true });
     observeMediaElements();
+
+    // --- START: Functions to attach listeners ---
+
+    // Attach listeners to a specific composer instance
+    const attachMediaListeners = (composerElement) => {
+        console.log('Attempting to attach media listeners to:', composerElement);
+        const fileInput = composerElement.querySelector(FILE_INPUT_SELECTOR);
+        const dropZone = composerElement.querySelector(DROP_ZONE_SELECTOR) || composerElement; // Fallback to composer itself
+
+        if (fileInput && !fileInput.dataset.mediaListenerAttached) {
+            console.log('Attaching CHANGE listener to file input:', fileInput);
+            fileInput.addEventListener('change', (event) => {
+                console.log('File input CHANGED');
+                handleFiles((event.target as HTMLInputElement)?.files);
+            });
+            fileInput.dataset.mediaListenerAttached = 'true'; // Mark as attached
+        } else if (!fileInput) {
+             console.warn('Could not find file input with selector:', FILE_INPUT_SELECTOR, 'within', composerElement);
+        } else {
+            console.log('Change listener already attached to file input.');
+        }
+
+        if (dropZone && !dropZone.dataset.dropListenerAttached) {
+            console.log('Attaching DROP/DRAGOVER listeners to drop zone:', dropZone);
+            
+            // Prevent default behavior for dragover to allow drop
+            dropZone.addEventListener('dragover', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                 // Optional: Add visual feedback
+                // dropZone.style.border = '2px dashed blue'; 
+            });
+
+            // Optional: Reset visual feedback on drag leave
+            // dropZone.addEventListener('dragleave', (event) => {
+            //    dropZone.style.border = ''; 
+            // });
+
+            dropZone.addEventListener('drop', (event) => {
+                console.log('DROP event detected');
+                event.preventDefault();
+                event.stopPropagation();
+                // dropZone.style.border = ''; // Reset visual feedback
+                if (event.dataTransfer?.files) {
+                    handleFiles(event.dataTransfer.files);
+                } else {
+                    console.log('No files found in dataTransfer.');
+                }
+            });
+            dropZone.dataset.dropListenerAttached = 'true'; // Mark as attached
+        } else if (!dropZone) {
+             console.warn('Could not find drop zone with selector:', DROP_ZONE_SELECTOR);
+        } else {
+             console.log('Drop/Dragover listeners already attached to drop zone.');
+        }
+    };
+
+    // Observe the document for composer elements appearing
+    const observeForComposer = () => {
+        console.log('Setting up observer for composer elements');
+        const observer = new MutationObserver((mutationsList) => {
+            for (const mutation of mutationsList) {
+                if (mutation.type === 'childList') {
+                    mutation.addedNodes.forEach(node => {
+                        if (node.nodeType === Node.ELEMENT_NODE) {
+                            const element = node as Element;
+                            // Check if the added node itself is a composer
+                            if (element.matches(COMPOSER_SELECTOR)) {
+                                console.log('Composer element added directly:', element);
+                                attachMediaListeners(element);
+                            }
+                            // Check if a composer exists within the added node
+                            element.querySelectorAll(COMPOSER_SELECTOR).forEach(composer => {
+                                console.log('Found composer element via querySelectorAll:', composer);
+                                attachMediaListeners(composer);
+                            });
+                        }
+                    });
+                }
+            }
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+        console.log('MutationObserver started for composer.');
+
+        // Also check for existing composer elements on script load
+        document.querySelectorAll(COMPOSER_SELECTOR).forEach(composer => {
+            console.log('Found existing composer on load:', composer);
+            attachMediaListeners(composer);
+        });
+    };
+
+    // --- END: Functions to attach listeners ---
+
+    // --- START: Call the observer setup ---
+    // Make sure this runs after the DOM is potentially ready
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+       observeForComposer();
+    } else {
+       document.addEventListener('DOMContentLoaded', observeForComposer);
+    }
+    // --- END: Call the observer setup ---
   }
 });
