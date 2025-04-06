@@ -529,58 +529,71 @@ export default defineContentScript({
     // Helper function to find the composer container from a textarea or any element within it
     function findComposerContainer(element) {
       console.log('Finding composer container for element:', element);
-      
+
       // Priority 1: Find the closest modal dialog containing the element
       const modalDialog = element.closest('[role="dialog"][aria-modal="true"]');
       if (modalDialog) {
         console.log('Found modal dialog container:', modalDialog);
-        // Quick check if it seems valid (contains the element and potentially image area)
-        if (modalDialog.contains(element) && modalDialog.querySelector('[data-testid*="image"], [role="img"], .r-1p0dtai, textarea[aria-label="Alt text"]')) {
-           console.log('Modal dialog seems valid, returning it.');
+        // Check if it seems valid (contains the element AND either image preview OR post button)
+        if (modalDialog.contains(element) &&
+            (modalDialog.querySelector('[data-testid="imagePreview"], [data-testid="images"]') ||
+             modalDialog.querySelector('button[aria-label*="Post"], button[type="submit"]'))) {
+           console.log('Modal dialog seems valid (contains element + preview/post button), returning it.');
            return modalDialog;
         } else {
            console.warn('Modal dialog found, but structure seems unexpected. Continuing search...');
            // Don't return modalDialog yet if it doesn't seem right
         }
       }
-      
+
       // Priority 2: Look for a data-testid="composer" ancestor
       const testIdComposer = element.closest('[data-testid="composer"]');
       if (testIdComposer) {
         console.log('Found container via data-testid="composer":', testIdComposer);
-        // Verify this container seems plausible (e.g., contains the element and other composer items)
-        if (testIdComposer.contains(element) && testIdComposer.querySelector('button[aria-label*="Post"], button[type="submit"], [data-testid*="image"]')) {
+        // Check if it seems valid (contains the element AND either image preview OR post button)
+        if (testIdComposer.contains(element) &&
+            (testIdComposer.querySelector('[data-testid="imagePreview"], [data-testid="images"]') ||
+             testIdComposer.querySelector('button[aria-label*="Post"], button[type="submit"]'))) {
            console.log('Composer with test ID seems valid.');
            return testIdComposer;
         }
          console.warn('Found data-testid="composer", but structure seems unexpected. Continuing search...');
       }
-      
+
       // Priority 3: Strict Fallback - Walk up looking for the *lowest* common ancestor
-      // containing BOTH the original element and a likely image preview element.
-      console.log('Modal or testid composer not found directly. Walking up DOM for common ancestor...');
+      // containing the original element, a reliable image preview indicator, AND action buttons.
+      console.log('Modal or testid composer not found directly. Walking up DOM for strict common ancestor...');
       let current = element.parentElement;
       let maxDepth = 10;
       let commonAncestor = null;
-      const imagePreviewSelector = '[data-testid="imagePreview"] img, .r-1p0dtai img, [role="img"] img:not([alt*="avatar"])'; // Target only likely preview images
+      const imagePreviewSelector = '[data-testid="imagePreview"] img:not([alt*="avatar"]), [data-testid="images"] img:not([alt*="avatar"])'; // Use reliable test IDs
+      const actionButtonSelector = 'button[aria-label*="Post"], button[type="submit"], button[aria-label*="Cancel"], button[aria-label*="Close"]';
 
       while (current && current.tagName !== 'BODY' && maxDepth > 0) {
-          // Check if this level contains BOTH the original element AND a specific image preview
-          if (current.contains(element) && current.querySelector(imagePreviewSelector)) {
-              console.log('Found potential common ancestor with image preview:', current);
+          // Check if this level contains ALL: original element, image preview, AND action buttons
+          if (current.contains(element) &&
+              current.querySelector(imagePreviewSelector) &&
+              current.querySelector(actionButtonSelector)) {
+
+              console.log('Found potential common ancestor with element, preview, and buttons:', current);
               commonAncestor = current; // Store this level as a potential candidate
-              // Check if the *parent* also contains both. If not, this 'current' is the lowest common ancestor.
+
+              // Check if the *parent* also contains all three. If not, this 'current' is the lowest common ancestor.
               const parent = current.parentElement;
-              if (!parent || parent.tagName === 'BODY' || !parent.contains(element) || !parent.querySelector(imagePreviewSelector)) {
-                 console.log('Parent does not contain both, selecting current as lowest common ancestor:', commonAncestor);
+              if (!parent || parent.tagName === 'BODY' ||
+                  !parent.contains(element) ||
+                  !parent.querySelector(imagePreviewSelector) ||
+                  !parent.querySelector(actionButtonSelector)) {
+
+                 console.log('Parent does not contain all three, selecting current as lowest common ancestor:', commonAncestor);
                  break; // Found the boundary
               }
-              // If parent also contains both, continue up to find the *actual* lowest
+              // If parent also contains all, continue up to find the *actual* lowest
           }
           maxDepth--;
           current = current.parentElement;
       }
-      
+
       if (commonAncestor) {
           console.log('Returning lowest common ancestor found:', commonAncestor);
           return commonAncestor;
@@ -588,7 +601,8 @@ export default defineContentScript({
 
       // Last Resort: If absolutely nothing worked, use the modal if found initially, otherwise a simple parent
       console.error('Could not find a reliable common ancestor. Using initial modal or fallback parent.');
-      return modalDialog || element.parentElement?.parentElement || element.parentElement; 
+      // Return modalDialog only if it was found initially, otherwise fallback
+      return modalDialog || element.parentElement?.parentElement || element.parentElement;
     }
     
     // Watch for media uploads to trigger auto-generation
