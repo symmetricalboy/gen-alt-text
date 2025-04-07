@@ -321,24 +321,38 @@ export default defineContentScript({
     function addGenerateButton(textarea: HTMLTextAreaElement) {
       if (textarea.dataset.geminiButtonAdded === 'true') return;
       console.log('[addGenerateButton] Starting for textarea:', textarea);
-      
-      const textAreaContainer = textarea.parentElement;
-      let container: Element | null = textAreaContainer?.parentElement || findComposerContainer(textarea);
 
-      if (!container) {
-          console.error('[addGenerateButton] Could not find a suitable container for the button.');
-          return;
+      // --- START: Find the MAIN composer container FIRST and robustly ---
+      const composerContainer = findComposerContainer(textarea);
+      if (!composerContainer) {
+          console.error('[addGenerateButton] Could not find the main composer container using findComposerContainer. Button will not be added or may not function correctly.');
+          // Decide if we should return here or allow adding the button but expect failure
+          // For now, let's prevent adding the button if the main container isn't found.
+          return; 
       }
-      if (container.querySelector(`#${BUTTON_ID}`)) {
-         console.log('[addGenerateButton] Button already exists in this container, skipping.');
+      console.log('[addGenerateButton] Found composer container:', composerContainer);
+      // --- END: Find the MAIN composer container FIRST ---
+
+      // Check if a button ALREADY exists within this specific composer container
+      if (composerContainer.querySelector(`#${BUTTON_ID}`)) {
+         console.log('[addGenerateButton] Button already exists in this composer container, marking textarea and skipping UI creation.');
+         textarea.dataset.geminiButtonAdded = 'true'; // Still mark the textarea
          return;
       }
       
-      const validContainer = container as Element; // Assert non-null
+      // Find a good place to physically *attach* the button UI (e.g., near the textarea)
+      const buttonAttachPoint = textarea.parentElement; // Or adjust as needed for layout
+      if (!buttonAttachPoint) {
+          console.error('[addGenerateButton] Could not find a suitable attach point (parentElement) for the button UI near the textarea.');
+          return; // Cannot attach the button
+      }
 
       const buttonContainer = document.createElement('div');
       Object.assign(buttonContainer.style, {
-          display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '8px'
+          display: 'flex', alignItems: 'center', gap: '8px', 
+          // Ensure the button UI doesn't interfere with layout too much
+          marginTop: '4px', // Add some space above
+          justifyContent: 'flex-end' // Align button to the right perhaps?
       });
 
       const button = document.createElement('button');
@@ -387,11 +401,15 @@ export default defineContentScript({
 
       const generateAltText = async () => {
         button.innerHTML = '';
-        button.textContent = 'Finding Media...'; // Updated initial status
+        button.textContent = 'Finding Media...';
         button.disabled = true;
 
-        const mediaElement = findMediaElement(validContainer);
-        console.log('[generateAltText] Media element found:', mediaElement);
+        // --- IMPORTANT: Use the composerContainer identified earlier for the search --- 
+        console.log('[generateAltText] Searching for media within confirmed composer container:', composerContainer);
+        const mediaElement = findMediaElement(composerContainer);
+        // --- End search context change ---
+        
+        console.log('[generateAltText] Media element found in composer:', mediaElement);
 
         if (!mediaElement || !(mediaElement instanceof HTMLImageElement || mediaElement instanceof HTMLVideoElement)) {
             console.error('[generateAltText] Could not find valid media element.');
@@ -483,13 +501,13 @@ export default defineContentScript({
         await generateAltText();
       };
 
-      if (textAreaContainer) {
-        textAreaContainer.appendChild(buttonContainer);
-      } else {
-        console.error('[addGenerateButton] Could not find textAreaContainer to append button to.');
-      }
+      // Append the button UI near the textarea
+      // Consider appending to buttonAttachPoint or maybe composerContainer depending on desired location
+      buttonAttachPoint.insertAdjacentElement('afterend', buttonContainer); // Place it after the textarea's parent
+      // Alternatively: composerContainer.appendChild(buttonContainer); // Append to bottom of composer
+
       textarea.dataset.geminiButtonAdded = 'true';
-      console.log('[addGenerateButton] Button setup complete.');
+      console.log('[addGenerateButton] Button UI setup complete and attached.');
     }
     
     // Helper function to find the composer container
