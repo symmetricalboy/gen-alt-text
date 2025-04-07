@@ -373,13 +373,15 @@ export default defineContentScript({
       // --- START: Determine the container where the MEDIA element lives ---
       let mediaSearchContainer: Element | null = null;
       if (contextContainer.matches('[aria-label="Video settings"]')) {
-          // If context is video settings, media is in the parent composePostView
-          mediaSearchContainer = contextContainer.closest('[data-testid="composePostView"]');
+          // If context is video settings, media is in the main composePostView, which is NOT an ancestor.
+          // Search the whole document for the main composer view.
+          console.log('[addGenerateButton] Context is "Video settings", searching document for [data-testid="composePostView"]...');
+          mediaSearchContainer = document.querySelector('[data-testid="composePostView"]'); // Find the active composer view in the document
           if (!mediaSearchContainer) {
-               console.error('[addGenerateButton] Context is "Video settings", but failed to find parent [data-testid="composePostView"] for media search.');
+               console.error('[addGenerateButton] Context is "Video settings", but failed to find [data-testid="composePostView"] in the document for media search.');
                return; // Cannot proceed without media container
           } 
-          console.log('[addGenerateButton] Context is "Video settings", targeting parent composePostView for media search:', mediaSearchContainer);
+          console.log('[addGenerateButton] Context is "Video settings", found composePostView in document for media search:', mediaSearchContainer);
       } else {
           // If context is composePostView or Add alt text (for images), media is within that context
           mediaSearchContainer = contextContainer;
