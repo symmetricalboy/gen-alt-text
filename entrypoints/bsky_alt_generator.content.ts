@@ -369,12 +369,12 @@ export default defineContentScript({
         generateAltText();
       });
 
-      // --- START: Modify Button Insertion ---
-      // Append the container directly to the textarea's parent element
-      buttonAttachPoint.appendChild(buttonContainer);
-      // --- END: Modify Button Insertion ---
+      // --- START: Modify Button Insertion Again ---
+      // Insert the container within the parent, but specifically after the textarea
+      buttonAttachPoint.insertBefore(buttonContainer, textarea.nextSibling);
+      // --- END: Modify Button Insertion Again ---
       textarea.dataset.geminiButtonAdded = 'true';
-      console.log('[addGenerateButton] Button added successfully inside parent:', buttonAttachPoint);
+      console.log('[addGenerateButton] Button added successfully after textarea within parent:', buttonAttachPoint);
     }
 
     // --- Simplified Manual Mode Observer ---
