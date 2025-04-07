@@ -229,9 +229,6 @@ export default defineContentScript({
           borderRadius: '4px', backgroundColor: '#f0f0f0', display: 'flex', alignItems: 'center',
           justifyContent: 'center'
       });
-      button.style.setProperty('visibility', 'visible', 'important');
-      button.style.setProperty('z-index', '9999', 'important');
-      button.style.setProperty('position', 'relative', 'important');
 
       const originalButtonContent = button.innerHTML; 
 
