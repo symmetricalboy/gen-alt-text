@@ -1,3 +1,22 @@
+// Define expected message structures for type safety
+interface InterceptedMediaPayload {
+  filename: string;
+  filetype: string;
+  dataUrl: string; // Base64 Data URL (e.g., data:image/png;base64,...)
+  size: number;
+}
+
+interface GenerateAltTextPayload {
+  imageUrl: string; // Could be blob:, data:, or https:
+  isVideo: boolean;
+}
+
+// Define a generic message type
+interface BackgroundMessage {
+  type: 'MEDIA_INTERCEPTED' | 'generateAltText'; // Add other types as needed
+  payload: InterceptedMediaPayload | GenerateAltTextPayload | any; // Use specific types or any if mixed
+}
+
 export default defineBackground(() => {
   console.log('Bluesky Alt Text Generator background script loaded');
   
@@ -83,157 +102,183 @@ By consistently applying these guidelines, you will create alt-text that is info
 
 By consistently applying these guidelines, you will create alt-text for video thumbnails that is informative, concise, and helpful for users of assistive technology.`;
   
-  // Listen for connections from content scripts
-  chrome.runtime.onConnect.addListener((port) => {
-    console.log(`Connection established from ${port.sender?.tab?.id ? 'tab ' + port.sender.tab.id : 'unknown source'}, name: ${port.name}`);
-
-    // Make sure it's our expected connection
-    if (port.name === "altTextGenerator") {
-      // Add a listener *for this specific port*
-      port.onMessage.addListener(async (message) => {
-        console.log('Message received via port:', message);
-
-        if (message.action === 'generateAltText') { 
-          let responsePayload = {}; // Define response payload
-          try {
-            console.log('Received alt text generation request for media:', message.imageUrl);
-            console.log('Is video?', message.isVideo);
-            
-            // 1. Fetch the image
-            const fetchResponse = await fetch(message.imageUrl);
-            if (!fetchResponse.ok) {
-              throw new Error(`Failed to fetch media: ${fetchResponse.statusText}`);
+  // --- Helper function to extract Base64 data --- 
+  // Handles both data URLs and fetching blob/http URLs
+  async function getBase64Data(source: string, mimeTypeHint?: string): Promise<{ base64Data: string; mimeType: string }> {
+    if (source.startsWith('data:')) {
+      // Already a Data URL
+      console.log('Source is Data URL');
+      const parts = source.match(/^data:(.+?);base64,(.*)$/);
+      if (!parts || parts.length < 3) {
+        throw new Error('Invalid Data URL format');
+      }
+      const mimeType = parts[1];
+      const base64Data = parts[2];
+      return { base64Data, mimeType };
+    } else {
+      // Assume it's a URL (blob:, https:, etc.) that needs fetching
+      console.log('Source is URL, fetching:', source);
+      const fetchResponse = await fetch(source);
+      if (!fetchResponse.ok) {
+        throw new Error(`Failed to fetch media URL: ${fetchResponse.statusText}`);
+      }
+      const blob = await fetchResponse.blob();
+      const mimeType = mimeTypeHint || blob.type || 'application/octet-stream'; // Use hint or blob type
+      console.log('Fetched blob, type:', mimeType);
+      
+      // Convert blob to base64
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          if (typeof reader.result === 'string') {
+            const base64WithPrefix = reader.result;
+            const base64Data = base64WithPrefix.split(',')[1]; // Remove data:*/*;base64,
+            if (base64Data) {
+              console.log('Blob converted to base64');
+              resolve({ base64Data, mimeType });
+            } else {
+              reject(new Error('Failed to extract base64 data from blob reader result.'));
             }
-            const blob = await fetchResponse.blob();
-            const base64Image = await blobToBase64(blob);
-            const mimeType = blob.type;
-            console.log('Media fetched and converted to base64');
-            
-            // 2. Call Gemini API with appropriate instructions based on media type
-            const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
-            const geminiRequestBody = {
+          } else {
+            reject(new Error('Blob reader result was not a string.'));
+          }
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
+  }
+  
+  // --- Main Alt Text Generation Logic ---
+  async function generateAltTextForMedia(
+    source: string, // Can be Data URL or fetchable URL
+    isVideo: boolean,
+    mimeTypeHint?: string // Optional hint for fetched blobs
+  ): Promise<{ altText: string } | { error: string }> {
+      try {
+          if (!GEMINI_API_KEY) throw new Error('Missing Gemini API Key');
+          
+          // 1. Get Base64 data and final mime type
+          const { base64Data, mimeType } = await getBase64Data(source, mimeTypeHint);
+          console.log(`Generating alt text for ${isVideo ? 'video' : 'image'} (type: ${mimeType})`);
+
+          // 2. Call Gemini API
+          const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+          const instructions = isVideo ? videoInstructions : imageInstructions;
+          
+          const geminiRequestBody = {
               contents: [{
-                parts: [
-                  // Use the appropriate instructions based on media type
-                  { text: message.isVideo ? videoInstructions : imageInstructions }, 
-                  {
-                    inline_data: {
-                      mime_type: mimeType,
-                      data: base64Image
-                    }
-                  }
-                ]
+                  parts: [
+                      { text: instructions },
+                      { inline_data: { mime_type: mimeType, data: base64Data } }
+                  ]
               }]
-            };
-            
-            const geminiResponse = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+          };
+          
+          const geminiResponse = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(geminiRequestBody)
-            });
-            
-            if (!geminiResponse.ok) {
+          });
+
+          if (!geminiResponse.ok) {
               const errorText = await geminiResponse.text();
-              throw new Error(`Gemini API error: ${geminiResponse.status} - ${errorText}`);
-            }
-            
-            const geminiData = await geminiResponse.json();
-            console.log('Gemini API response received. Data:', JSON.stringify(geminiData));
-            
-            const generatedText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
-            console.log('Extracted text:', generatedText);
-            
-            if (!generatedText) {
-              console.error('Generated text is missing from Gemini response.');
+              console.error('Gemini API error response:', errorText);
+              throw new Error(`Gemini API error: ${geminiResponse.status} - ${errorText.substring(0, 100)}...`);
+          }
+
+          const geminiData = await geminiResponse.json();
+          // console.log('Gemini API full response:', JSON.stringify(geminiData)); // Verbose log
+          
+          const generatedText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
+          console.log('Extracted alt text:', generatedText);
+
+          if (!generatedText) {
+              console.error('Generated text missing from Gemini response:', geminiData);
               throw new Error('Could not extract text from Gemini response');
-            }
-            
-            // Prepare success response
-            responsePayload = { altText: generatedText.trim() };
-            console.log('Prepared successful response:', responsePayload);
-            
-          } catch (error) {
-            console.error('Error caught in alt text generation process:', error);
-            const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-            // Prepare error response
-            responsePayload = { error: errorMessage };
-             console.log('Prepared error response:', responsePayload);
           }
 
-          // Send the response back via the same port
-          if (port) { // Check if port still exists
-             console.log('Attempting to post response message via port:', responsePayload);
-             try {
-                port.postMessage(responsePayload);
-                console.log('Successfully posted message via port.');
-             } catch (postError) {
-                console.error('Error posting message back via port:', postError, ' Port disconnected?');
-             }
-          } else {
-            console.error('Port was disconnected before response could be sent.');
-          }
+          return { altText: generatedText.trim() };
+          
+      } catch (error: unknown) {
+          console.error('Error in generateAltTextForMedia:', error);
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error during generation';
+          return { error: errorMessage };
+      }
+  }
 
+  // --- Listener for Port Connections (from original button click) ---
+  browser.runtime.onConnect.addListener((port) => {
+    console.log(`Port connected: ${port.name}`, port.sender);
+
+    if (port.name === "altTextGenerator") {
+      port.onMessage.addListener(async (message: BackgroundMessage) => {
+        console.log('Port message received:', message);
+
+        if (message.type === 'generateAltText' && message.payload) {
+          const payload = message.payload as GenerateAltTextPayload;
+          console.log(`Port request: Generate alt text for ${payload.imageUrl}, isVideo: ${payload.isVideo}`);
+          
+          // Use the main generation function, fetching if necessary
+          const result = await generateAltTextForMedia(payload.imageUrl, payload.isVideo);
+          
+          console.log('Sending result back via port:', result);
+          try {
+            port.postMessage(result); // Send {altText: ...} or {error: ...}
+          } catch (postError: unknown) {
+            console.error('Error posting message back via port:', postError);
+          }
         } else {
-          console.warn('Received unknown action via port:', message.action);
-          // Optionally send back an error for unknown actions
-          // port.postMessage({ error: `Unknown action: ${message.action}` });
+          console.warn('Received unknown message type via port:', message.type);
         }
-      }); // End of port.onMessage listener
-
-      // Optional: Handle disconnection from the content script side
-      port.onDisconnect.addListener(() => {
-         console.log(`Port ${port.name} disconnected.`);
-         // Clean up any resources associated with this specific port if necessary
       });
 
-    } // End if port.name === "altTextGenerator"
-  }); // End of chrome.runtime.onConnect listener
+      port.onDisconnect.addListener(() => {
+         console.log(`Port ${port.name} disconnected.`);
+         // Optional cleanup here
+      });
+    }
+  });
   
-  // Helper function to convert blob to base64
-  function blobToBase64(blob) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        // Remove the data URL prefix (e.g., "data:image/png;base64,")
-        const base64 = reader.result.split(',')[1];
-        resolve(base64);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }
+  // --- Listener for General Messages (like MEDIA_INTERCEPTED) ---
+  browser.runtime.onMessage.addListener(async (message: BackgroundMessage, sender, sendResponse) => {
+    console.log('General message received:', message.type, 'from sender:', sender.tab?.id);
+
+    if (message.type === 'MEDIA_INTERCEPTED' && message.payload) {
+      const payload = message.payload as InterceptedMediaPayload;
+      console.log(`Intercepted media: ${payload.filename} (${payload.filetype}, ${payload.size} bytes)`);
+      
+      // --- TODO: Decide if/when to trigger generation for intercepted media --- 
+      // Option 1: Generate immediately (demonstrated below)
+      // Option 2: Store it and wait for user action (e.g., button click in popup)
+      // Option 3: Only generate if auto-mode is enabled in config
+      
+      console.log('Attempting immediate generation for intercepted media...');
+      const isVideo = payload.filetype.startsWith('video/');
+      
+      // Use the main generation function with the provided Data URL
+      const result = await generateAltTextForMedia(payload.dataUrl, isVideo, payload.filetype);
+      
+      console.log('Result for intercepted media:', result);
+      
+      // What to do with the result? 
+      // - Could send it back to the content script (though it might not expect it)
+      // - Could store it for later retrieval
+      // - Could update a popup UI
+      
+      // Example: Send acknowledgement back to content script
+      sendResponse({ status: 'Intercepted and processed', filename: payload.filename, result });
+      return true; // Indicate async response
+
+    } else {
+      console.log('Ignoring unknown message type or missing payload:', message.type);
+      // Optional: Send response for unhandled types if needed
+      // sendResponse({ status: 'Unknown message type' });
+    }
+    
+    // Return false if not sending an asynchronous response.
+    return false; 
+  });
+  
+  console.log('Background script event listeners attached.');
 }); 
-
-// --- START: Add general message listener ---
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('General message received:', message, 'from sender:', sender);
-
-  if (message.type === 'MEDIA_INTERCEPTED') {
-    console.log('Received intercepted media data:');
-    console.log(`  Filename: ${message.payload?.filename}`);
-    console.log(`  Type: ${message.payload?.filetype}`);
-    console.log(`  Size: ${message.payload?.size} bytes`);
-    // You can access the base64 data URL via message.payload.dataUrl
-    // console.log(`  Data URL (first 100 chars): ${message.payload?.dataUrl?.substring(0, 100)}...`); 
-    
-    // TODO: Decide what to do with the intercepted media data.
-    // - Store it?
-    // - Trigger alt text generation immediately?
-    // - Wait for user action?
-    
-    // Example: Send a simple acknowledgement back (optional)
-    sendResponse({ status: 'Received media', filename: message.payload?.filename });
-    
-    // Return true to indicate you wish to send a response asynchronously
-    // (Needed if you were doing async work here before sending response)
-    // return true; 
-  } else {
-    console.log('Received message of unknown type:', message.type);
-    // Optionally send a response for unhandled message types
-    // sendResponse({ status: 'Unknown message type' });
-  }
-  
-  // Return false or undefined if not sending an asynchronous response.
-  return false; 
-});
-// --- END: Add general message listener --- 

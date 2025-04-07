@@ -22,218 +22,144 @@ export default defineContentScript({
     // --- START: New selectors and file handling logic ---
     // Selectors - these might need adjustment based on bsky.app's actual structure
     const COMPOSER_SELECTOR = '[data-testid="composer"]'; // Assuming a general composer container
-    const FILE_INPUT_SELECTOR = `${COMPOSER_SELECTOR} input[type="file"][aria-label*="media" i]`; // More specific input selector
+    const FILE_INPUT_SELECTOR = `input[type="file"][aria-label*="media" i]`; // More specific input selector, relative to composer later
     const DROP_ZONE_SELECTOR = COMPOSER_SELECTOR; // Assuming the whole composer is the drop zone
 
     // --- END: New selectors and file handling logic ---
     
     // Configuration (will be controlled by popup)
-    let config = {
+    // Define config type for better safety
+    interface Config {
+      autoMode: boolean;
+      showToasts: boolean;
+    }
+    let config: Config = {
       autoMode: false,
       showToasts: true
     };
-    
-    // Helper function to safely access chrome APIs
-    const safeChrome = {
-      storage: {
-        sync: {
-          get: (keys, callback) => {
-            try {
-              if (chrome?.storage?.sync) {
-                chrome.storage.sync.get(keys, callback);
-              } else {
-                console.warn('Chrome storage API not available, using default values');
-                callback({});
-              }
-            } catch (error) {
-              console.error('Error accessing chrome.storage.sync.get:', error);
-              callback({});
-            }
-          },
-          set: (items) => {
-            try {
-              if (chrome?.storage?.sync) {
-                chrome.storage.sync.set(items);
-              } else {
-                console.warn('Chrome storage API not available, cannot save settings');
-              }
-            } catch (error) {
-              console.error('Error accessing chrome.storage.sync.set:', error);
-            }
-          }
+        
+    // --- START: Load config using wxt/storage ---
+    async function loadConfig() {
+      try {
+        // Use browser.storage.local
+        const result = await browser.storage.local.get(['autoMode', 'showToasts']) as Partial<Config>; 
+        if (result) {
+          config = { ...config, ...result };
         }
-      },
-      runtime: {
-        connect: (options) => {
-          try {
-            if (chrome?.runtime?.connect) {
-              return chrome.runtime.connect(options);
-            } else {
-              console.error('Chrome runtime API not available');
-              throw new Error('Chrome runtime API not available');
-            }
-          } catch (error) {
-            console.error('Error connecting to background script:', error);
-            throw error;
-          }
-        },
-        onChanged: {
-          addListener: (callback) => {
-            try {
-              if (chrome?.storage?.onChanged) {
-                chrome.storage.onChanged.addListener(callback);
-              } else {
-                console.warn('Chrome storage.onChanged API not available');
-              }
-            } catch (error) {
-              console.error('Error adding onChanged listener:', error);
-            }
-          }
-        }
+        console.log('Loaded config:', config);
+      } catch (error: unknown) {
+        console.error('Error loading config from storage:', error);
       }
-    };
+    }
+    loadConfig();
     
-    // Try to load config from storage
-    safeChrome.storage.sync.get(['autoMode', 'showToasts'], (result) => {
-      if (result.autoMode !== undefined) config.autoMode = result.autoMode;
-      if (result.showToasts !== undefined) config.showToasts = result.showToasts;
-      console.log('Loaded config:', config);
+    // --- START: Listen for config changes using wxt/storage ---
+    // Use browser.storage.onChanged
+    browser.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName === 'local') {
+            let changed = false;
+            if (changes.autoMode) { config.autoMode = changes.autoMode.newValue; changed = true; }
+            if (changes.showToasts) { config.showToasts = changes.showToasts.newValue; changed = true; }
+            if (changed) console.log('Updated config via storage listener:', config);
+        }
     });
-    
-    // Listen for config changes
-    safeChrome.runtime.onChanged.addListener((changes) => {
-      if (changes.autoMode) config.autoMode = changes.autoMode.newValue;
-      if (changes.showToasts) config.showToasts = changes.showToasts.newValue;
-      console.log('Updated config:', config);
-    });
+    // --- END: Listen for config changes ---
     
     // --- START: Function to handle and send files ---
-    const handleFiles = (files) => {
+    const handleFiles = (files: FileList | null) => {
       if (!files || files.length === 0) {
         return;
       }
       console.log(`Intercepted ${files.length} file(s)`);
 
       for (const file of files) {
-        // Basic filtering - can be expanded (e.g., check config if only images are needed)
         if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
            console.log(`Skipping non-media file: ${file.name} (${file.type})`);
            continue;
         }
 
         const reader = new FileReader();
-        reader.onload = (e) => {
+        reader.onload = (e: ProgressEvent<FileReader>) => {
           const base64Data = e.target?.result;
           if (typeof base64Data === 'string') {
              console.log(`Read file ${file.name} (${file.type}), sending to background...`);
-             // Send data to background script
-             try {
-                // Use existing safeChrome helper if available, otherwise direct call
-                const runtime = (typeof safeChrome !== 'undefined' && safeChrome.runtime) ? safeChrome.runtime : chrome?.runtime;
-                if (runtime?.sendMessage) {
-                    runtime.sendMessage({
-                      type: 'MEDIA_INTERCEPTED',
-                      payload: {
-                        filename: file.name,
-                        filetype: file.type,
-                        dataUrl: base64Data, // Base64 data URL
-                        size: file.size
-                      }
-                    });
-                    // Optionally show a toast
-                    if (config.showToasts) {
-                       createToast(`Captured ${file.name}`, 'info', 2000);
-                    }
-                } else {
-                   console.error('Cannot send message: chrome.runtime.sendMessage not available.');
-                }
-             } catch (error) {
-                console.error('Error sending message to background script:', error);
+             // Use browser.runtime.sendMessage
+             browser.runtime.sendMessage({
+               type: 'MEDIA_INTERCEPTED',
+               payload: {
+                 filename: file.name,
+                 filetype: file.type,
+                 dataUrl: base64Data,
+                 size: file.size
+               }
+             }).then((response: any) => {
+               console.log('Background script responded to MEDIA_INTERCEPTED:', response);
+             }).catch((error: unknown) => {
+               console.error('Error sending MEDIA_INTERCEPTED message or receiving response:', error);
+             });
+
+             if (config.showToasts) {
+                createToast(`Captured ${file.name}`, 'info', 2000);
              }
           } else {
              console.error(`Failed to read file ${file.name} as Base64 Data URL.`);
           }
         };
-        reader.onerror = (e) => {
+        reader.onerror = (e: ProgressEvent<FileReader>) => {
           console.error(`Error reading file ${file.name}:`, e);
         };
-        reader.readAsDataURL(file); // Read as Base64 Data URL
+        reader.readAsDataURL(file);
       }
     };
     // --- END: Function to handle and send files ---
     
     // Toast notification system
-    const createToast = (message, type = 'info', duration = 5000) => {
-      // Create toast container if it doesn't exist
+    const createToast = (message: string, type: 'info' | 'success' | 'error' | 'warning' = 'info', duration: number = 5000) => {
       let toastContainer = document.getElementById('gemini-toast-container');
       if (!toastContainer) {
         toastContainer = document.createElement('div');
         toastContainer.id = 'gemini-toast-container';
-        toastContainer.style.position = 'fixed';
-        toastContainer.style.bottom = '20px';
-        toastContainer.style.right = '20px';
-        toastContainer.style.zIndex = '10000';
-        toastContainer.style.display = 'flex';
-        toastContainer.style.flexDirection = 'column';
-        toastContainer.style.gap = '10px';
+        Object.assign(toastContainer.style, {
+          position: 'fixed', bottom: '20px', right: '20px', zIndex: '10000',
+          display: 'flex', flexDirection: 'column', gap: '10px'
+        });
         document.body.appendChild(toastContainer);
       }
       
-      // Create toast element
       const toast = document.createElement('div');
-      toast.style.padding = '12px 16px';
-      toast.style.borderRadius = '6px';
-      toast.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.15)';
-      toast.style.margin = '5px';
-      toast.style.minWidth = '200px';
-      toast.style.color = '#ffffff';
-      toast.style.fontSize = '14px';
-      toast.style.transition = 'all 0.3s ease';
+      Object.assign(toast.style, {
+        padding: '12px 16px', borderRadius: '6px', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
+        margin: '5px', minWidth: '200px', color: '#ffffff', fontSize: '14px',
+        transition: 'all 0.3s ease'
+      });
       
-      // Set colors based on type
-      if (type === 'success') {
-        toast.style.backgroundColor = '#1da882';
-      } else if (type === 'error') {
-        toast.style.backgroundColor = '#e53935';
-      } else if (type === 'warning') {
-        toast.style.backgroundColor = '#f59f0b';
-      } else {
-        toast.style.backgroundColor = '#007eda';
-      }
-      
+      const colors = { success: '#1da882', error: '#e53935', warning: '#f59f0b', info: '#007eda' };
+      toast.style.backgroundColor = colors[type] || colors.info;
       toast.textContent = message;
       
-      // Add close button
       const closeBtn = document.createElement('span');
       closeBtn.textContent = '×';
-      closeBtn.style.marginLeft = '8px';
-      closeBtn.style.cursor = 'pointer';
-      closeBtn.style.float = 'right';
-      closeBtn.style.fontWeight = 'bold';
+      Object.assign(closeBtn.style, {
+         marginLeft: '8px', cursor: 'pointer', float: 'right', fontWeight: 'bold'
+      });
       closeBtn.onclick = () => {
-        toastContainer.removeChild(toast);
+        if (toast.parentNode === toastContainer) toastContainer.removeChild(toast);
       };
       toast.appendChild(closeBtn);
       
-      // Add to container and set timeout for removal
       toastContainer.appendChild(toast);
       setTimeout(() => {
-        if (toastContainer.contains(toast)) {
-          toastContainer.removeChild(toast);
-        }
+        if (toast.parentNode === toastContainer) toastContainer.removeChild(toast);
       }, duration);
     };
     
-    // Function to check if an element is an image or video uploader
-    const isMediaUploader = (element) => {
-      // Check if it's an input with type=file that accepts images or videos
-      if (element.tagName === 'INPUT' && 
+    // Function to check if an element is an image or video uploader (No changes needed, types already good)
+    const isMediaUploader = (element: Element): boolean => {
+      if (element instanceof HTMLInputElement && 
           element.type === 'file' && 
           (element.accept?.includes('image') || element.accept?.includes('video'))) {
         return true;
       }
-      
-      // Check for common attributes used for upload buttons/areas
       if (element.getAttribute('data-testid')?.includes('upload') || 
           element.getAttribute('aria-label')?.includes('upload') ||
           element.getAttribute('role') === 'button' && 
@@ -241,660 +167,421 @@ export default defineContentScript({
            element.textContent?.includes('video') || element.textContent?.includes('media'))) {
         return true;
       }
-      
       return false;
     };
     
-    // Function to find media elements in the composer
-    const findMediaElement = (container) => {
+    // Function to find media elements in the composer (Add types)
+    const findMediaElement = (container: Element): HTMLImageElement | HTMLVideoElement | null => {
       console.log('Searching for media in container:', container);
 
-      // --- PRIORITY 1: Check for specific local file preview (Data URL within preview container) ---
-      const specificDataUrlImage = container.querySelector('[data-testid="imagePreview"] img[src^="data:image/"], [data-testid="images"] img[src^="data:image/"]');
-      if (specificDataUrlImage) {
-        console.log('Found image via SPECIFIC data URL selector:', specificDataUrlImage);
-        const rect = specificDataUrlImage.getBoundingClientRect();
-        // Lowered threshold slightly for previews, check visibility
-        if (rect.width > 10 && rect.height > 10 && specificDataUrlImage.offsetParent !== null) {
-           console.log('Specific data URL image is valid, returning it.');
-           return specificDataUrlImage;
-        } else {
-           console.warn('Specific data URL image found but seems hidden/too small. Rect:', rect, 'OffsetParent:', specificDataUrlImage.offsetParent);
-        }
-      } else {
-         console.log('Did not find image via SPECIFIC data URL selector (e.g., [data-testid="imagePreview"] img[src^="data:image/"]).');
+      const isElementVisible = (el: Element | null): el is HTMLElement => {
+          if (!el) return false;
+          const rect = el.getBoundingClientRect();
+          return rect.width > 10 && rect.height > 10 && (el as HTMLElement).offsetParent !== null;
+      };
+      
+      const selectors: string[] = [
+        '[data-testid="imagePreview"] img[src^="data:image/"]', '[data-testid="images"] img[src^="data:image/"]', // Specific Data URL
+        '[data-testid="imagePreview"] img[src^="blob:"]', '[data-testid="images"] img[src^="blob:"]', // Specific Blob URL
+        'img[src^="data:image/"]', // Any Data URL
+        'img[src^="blob:"]' // Any Blob URL
+      ];
+
+      for (const selector of selectors) {
+          const img = container.querySelector<HTMLImageElement>(selector);
+          if (isElementVisible(img)) {
+              console.log(`Found image via selector: ${selector}`, img);
+              return img;
+          } else if (img) {
+              console.warn(`Image found but hidden/too small with selector: ${selector}`, img);
+          }
       }
+      console.log('No valid data/blob URL image found via direct selectors, proceeding to scoring logic...');
 
-      // --- PRIORITY 2: Check for ANY local file preview (Data URL) - Wider check as fallback ---
-      const anyDataUrlImage = container.querySelector('img[src^="data:image/"]');
-       if (anyDataUrlImage) {
-        console.log('Found image via ANY data URL selector:', anyDataUrlImage);
-        const rect = anyDataUrlImage.getBoundingClientRect();
-        if (rect.width > 10 && rect.height > 10 && anyDataUrlImage.offsetParent !== null) {
-           console.log('ANY data URL image is valid, returning it.');
-           return anyDataUrlImage;
-        } else {
-           console.warn('ANY data URL image found but seems hidden/too small. Rect:', rect, 'OffsetParent:', anyDataUrlImage.offsetParent);
-        }
-      } else {
-         console.log('Did not find image via ANY data URL selector.');
-      }
-
-      // --- Fallback to existing scoring logic if no data URL image found ---
-      console.log('No valid data URL image found, proceeding to scoring logic...');
-      const candidates = Array.from(container.querySelectorAll('img, video'));
-      console.log(`Found ${candidates.length} candidates for scoring.`);
-
-      // Get bounds of the composer/modal - NOTE: May be inaccurate if container is too large
-      // const composerRect = container.getBoundingClientRect(); 
-      let bestCandidate = null;
+      const candidates = Array.from(container.querySelectorAll<HTMLImageElement | HTMLVideoElement>('img, video'));
+      let bestCandidate: HTMLImageElement | HTMLVideoElement | null = null;
       let highestScore = -1;
 
       for (const el of candidates) {
         let currentScore = 0;
         const elRect = el.getBoundingClientRect();
         
-        // --- Basic Checks & Filtering --- 
-        
-        // 0. Visibility Check (Must be rendered)
-        // Basic Visibility Check
-        if (elRect.width === 0 || elRect.height === 0 || el.offsetParent === null) {
-           // console.log('Skipping candidate (not visible):', el);
-           continue; 
-        }
+        if (!isElementVisible(el)) continue;
 
-        if (el.tagName === 'VIDEO') {
-          // Added check for data URL video as well
-          if (el.src?.startsWith('data:video/') || el.src || el.querySelector('source[src]')) {
-            console.log('Found video candidate:', el);
-            currentScore = 1000; // High score for video
+        if (el instanceof HTMLVideoElement) {
+          if (el.src || el.querySelector('source[src]')) {
+            currentScore = 1000;
           } else {
-            continue; // Skip video tags without src
+            continue;
           }
-        } else { // Process IMG tags
+        } else if (el instanceof HTMLImageElement) {
           const img = el;
           const src = img.src || '';
           const alt = img.alt || '';
 
-          // 1. Basic Exclusions (Avatars, invalid src)
-          // Basic Exclusions (Avatars, already checked data URLs)
-          if (!src || src.startsWith('data:') || alt.toLowerCase().includes('avatar') || src.includes('avatar') || src.includes('profile')) {
-            // console.log('Skipping image (avatar/invalid src):', img);
+          if (!src || src.startsWith('data:') || src.startsWith('blob:') || alt.toLowerCase().includes('avatar') || src.includes('avatar') || src.includes('profile')) {
             continue;
           }
-
-          // 2. REMOVED Position Check - Was likely causing issues due to inaccurate container bounds
-          /*
-          const imgCenterX = elRect.left + elRect.width / 2;
-          const imgCenterY = elRect.top + elRect.height / 2;
-          if (imgCenterX < composerRect.left || imgCenterX > composerRect.right || imgCenterY < composerRect.top || imgCenterY > composerRect.bottom) {
-              console.log('Skipping image: center point outside composer bounds.', img);
-              continue; 
-          }
-          */
           
-          // 3. Size Check 
           const minSize = 50;
           if (elRect.width < minSize || elRect.height < minSize) {
-            // console.log(`Skipping image (too small: ${elRect.width}x${elRect.height}):`, img);
             continue;
           }
           
-          // --- Scoring & Prioritization --- 
-          currentScore = 1; // Base score for being a visible, non-avatar image
-          console.log(`Valid image candidate found: ${elRect.width}x${elRect.height}`, img);
+          currentScore = 1;
+          console.log(`Valid scoring candidate: ${elRect.width}x${elRect.height}`, img);
 
-          // VERY HIGH boost if it's inside the *exact* preview structure
-          const previewWrapper = img.closest('[data-testid="imagePreview"], .r-1p0dtai[style*="aspect-ratio"]'); // Keep using reliable non-generated selectors where possible
+          // Corrected closest call with type parameter outside selector
+          const previewWrapper = img.closest<Element>('[data-testid="imagePreview"], .r-1p0dtai[style*="aspect-ratio"]');
           if (previewWrapper) {
-            console.log('Image is inside a high-priority preview wrapper, boosting score significantly.');
             currentScore += 500;
-            
-            // Check if the wrapper is directly within the main container (not deeply nested)
-            // This check might be less useful now that container finding is less reliable
-            // if (previewWrapper.parentElement === container || previewWrapper.parentElement?.parentElement === container) {
-            //    console.log('Preview wrapper is close to container root, further boost.');
-            //    currentScore += 50;
-            // }
           }
           
-          // Moderate boost for other relevant test IDs or roles if not already boosted
           if (currentScore <= 1 && img.matches('[data-testid*="image"], [data-testid*="preview"], [role="img"]')) {
-             console.log('Image has a relevant test ID/role, boosting score.');
              currentScore += 50;
           }
           
-          // Penalize if it looks like it's part of a background post structure
-          // Compare closest post container of image vs closest post container of the main container
-          const imgPostContainer = img.closest('[data-testid="postView"], [role="article"]');
-          const mainPostContainer = container.closest('[data-testid="postView"], [role="article"]');
+          const imgPostContainer = img.closest<Element>('[data-testid="postView"], [role="article"]');
+          const mainPostContainer = (container instanceof Element) ? container.closest<Element>('[data-testid="postView"], [role="article"]') : null;
           if (imgPostContainer && mainPostContainer && imgPostContainer !== mainPostContainer) {
-               console.log('Image seems to be inside a *different* post structure, penalizing score.');
-               currentScore = Math.max(0, currentScore - 100); // Stronger penalty
+               currentScore = Math.max(0, currentScore - 100);
           }
           
-          // Slight boost for larger images
           currentScore += Math.min(5, Math.floor(elRect.width / 100)); 
         }
         
-        // --- Selection --- 
-        console.log('Candidate score:', currentScore, el);
         if (currentScore > highestScore) {
             highestScore = currentScore;
             bestCandidate = el;
-            console.log('New best candidate selected with score:', highestScore, bestCandidate);
+            console.log('New best candidate (scoring) with score:', highestScore, bestCandidate);
         }
       }
       
       if (bestCandidate) {
         console.log('Final selected best candidate (from scoring):', bestCandidate);
       } else {
-         console.error('Failed to find a suitable media candidate within the container after scoring (Highest score <= 0).');
-         // Added more specific error for scoring failure
          console.error('SCORING FAILED: No suitable media candidate found via scoring logic.');
       }
-
-      return bestCandidate; // Return the highest scoring candidate or null
+      return bestCandidate;
     };
     
-    // Add the button to an alt text textarea
-    function addGenerateButton(textarea) {
+    // Add the button to an alt text textarea (Add types)
+    function addGenerateButton(textarea: HTMLTextAreaElement) {
+      if (textarea.dataset.geminiButtonAdded === 'true') return;
       console.log('[addGenerateButton] Starting for textarea:', textarea);
-
-      // Prevent adding multiple buttons
-      if (textarea.dataset.geminiButtonAdded === 'true') {
-        console.log('[addGenerateButton] Button already added, skipping.');
-        return;
-      }
-
-      // --- Find the Shared Parent Container ---
-      // Based on the structure: textarea -> textAreaContainer -> sharedParentContainer
+      
       const textAreaContainer = textarea.parentElement;
-      let container; // Define container variable
-      const sharedParentContainer = textAreaContainer?.parentElement;
+      let container: Element | null = textAreaContainer?.parentElement || findComposerContainer(textarea);
 
-      if (!sharedParentContainer) {
-          console.error('[addGenerateButton] Could not find expected sharedParentContainer (parent of textarea\'s parent). Cannot proceed.');
-          // As a fallback, try the complex container finder just in case structure changed slightly
-          const fallbackContainer = findComposerContainer(textarea);
-          if (!fallbackContainer) {
-              console.error('[addGenerateButton] Fallback container finder also failed.');
-              return;
-          }
-          console.warn('[addGenerateButton] Using fallback container:', fallbackContainer);
-          // If using fallback, we proceed but might face the same issues as before
-          // Reassign container for the rest of the function
-          container = fallbackContainer;
-      } else {
-           console.log('[addGenerateButton] Found sharedParentContainer:', sharedParentContainer);
-           // Use this specifically found container for the rest of the operations
-           container = sharedParentContainer;
+      if (!container) {
+          console.error('[addGenerateButton] Could not find a suitable container for the button.');
+          return;
       }
-
-
-      // Check if button already exists within the determined container
       if (container.querySelector(`#${BUTTON_ID}`)) {
-        console.log('[addGenerateButton] Button already exists in this container, skipping.');
-        return;
+         console.log('[addGenerateButton] Button already exists in this container, skipping.');
+         return;
       }
+      
+      const validContainer = container as Element; // Assert non-null
 
-      // Create the button container for positioning (append near textarea)
       const buttonContainer = document.createElement('div');
-      buttonContainer.style.display = 'flex';
-      buttonContainer.style.alignItems = 'center';
-      buttonContainer.style.gap = '8px';
-      buttonContainer.style.marginLeft = '8px';
+      Object.assign(buttonContainer.style, {
+          display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '8px'
+      });
 
-
-      // Create the button with an icon
       const button = document.createElement('button');
       button.id = BUTTON_ID;
       button.title = 'Generate Alt Text';
-      button.innerHTML = `
-        <svg width="20" height="20" viewBox="-5 -10 128 128" xmlns="http://www.w3.org/2000/svg">
-          <path d="M 35.746,4 C 20.973,4 9,15.973 9,30.746 V 77.254 C 9,92.027 20.973,104 35.746,104 H 82.254 C 97.027,104 109,92.027 109,77.254 V 30.746 C 109,15.973 97.027,4 82.254,4 Z m -19.77,26.746 c 0,-10.918 8.8516,-19.77 19.77,-19.77 h 46.508 c 10.918,0 19.77,8.8516 19.77,19.77 v 46.508 c 0,10.918 -8.8516,19.77 -19.77,19.77 H 35.746 c -10.918,0 -19.77,-8.8516 -19.77,-19.77 z m 45.609,0.37891 c -1.082,-2.1055 -4.0898,-2.1055 -5.1719,0 l -4.3242,8.4219 c -1.668,3.2383 -4.3047,5.875 -7.543,7.543 l -8.4219,4.3242 c -2.1055,1.082 -2.1055,4.0898 0,5.1719 l 8.4219,4.3242 c 3.2383,1.668 5.875,4.3047 7.543,7.543 l 4.3242,8.4219 c 1.082,2.1055 4.0898,2.1055 5.1719,0 l 4.3242,-8.4219 c 1.668,-3.2383 4.3047,-5.875 7.543,-7.543 l 8.4219,-4.3242 c 2.1055,-1.082 2.1055,-4.0898 0,-5.1719 l -8.4219,-4.3242 c -3.2383,-1.668 -5.875,-4.3047 -7.543,-7.543 z"
-             fill="#323248" stroke="none" />
-        </svg>
-      `;
-      button.style.marginLeft = '8px';
-      button.style.padding = '4px';
-      button.style.cursor = 'pointer';
-      button.style.border = '1px solid #ccc';
-      button.style.borderRadius = '4px';
-      button.style.backgroundColor = '#f0f0f0';
-      button.style.display = 'flex';
-      button.style.alignItems = 'center';
-      button.style.justifyContent = 'center';
+      button.innerHTML = `<svg width="20" height="20" viewBox="-5 -10 128 128" xmlns="http://www.w3.org/2000/svg"><path d="M 35.746,4 C 20.973,4 9,15.973 9,30.746 V 77.254 C 9,92.027 20.973,104 35.746,104 H 82.254 C 97.027,104 109,92.027 109,77.254 V 30.746 C 109,15.973 97.027,4 82.254,4 Z m -19.77,26.746 c 0,-10.918 8.8516,-19.77 19.77,-19.77 h 46.508 c 10.918,0 19.77,8.8516 19.77,19.77 v 46.508 c 0,10.918 -8.8516,19.77 -19.77,19.77 H 35.746 c -10.918,0 -19.77,-8.8516 -19.77,-19.77 z m 45.609,0.37891 c -1.082,-2.1055 -4.0898,-2.1055 -5.1719,0 l -4.3242,8.4219 c -1.668,3.2383 -4.3047,5.875 -7.543,7.543 l -8.4219,4.3242 c -2.1055,1.082 -2.1055,4.0898 0,5.1719 l 8.4219,4.3242 c 3.2383,1.668 5.875,4.3047 7.543,7.543 l 4.3242,8.4219 c 1.082,2.1055 4.0898,2.1055 5.1719,0 l 4.3242,-8.4219 c 1.668,-3.2383 4.3047,-5.875 7.543,-7.543 l 8.4219,-4.3242 c 2.1055,-1.082 2.1055,-4.0898 0,-5.1719 l -8.4219,-4.3242 c -3.2383,-1.668 -5.875,-4.3047 -7.543,-7.543 z" fill="#323248" stroke="none" /></svg>`;
+      Object.assign(button.style, {
+          marginLeft: '8px', padding: '4px', cursor: 'pointer', border: '1px solid #ccc',
+          borderRadius: '4px', backgroundColor: '#f0f0f0', display: 'flex', alignItems: 'center',
+          justifyContent: 'center'
+      });
       button.style.setProperty('visibility', 'visible', 'important');
       button.style.setProperty('z-index', '9999', 'important');
       button.style.setProperty('position', 'relative', 'important');
 
       const originalButtonContent = button.innerHTML;
 
-      // Create auto-mode toggle
       const autoToggle = document.createElement('label');
       autoToggle.className = 'gemini-auto-toggle';
       autoToggle.title = 'Auto-generate alt text when media is added';
-      autoToggle.style.display = 'flex';
-      autoToggle.style.alignItems = 'center';
-      autoToggle.style.fontSize = '12px';
-      autoToggle.style.cursor = 'pointer';
+      Object.assign(autoToggle.style, {
+         display: 'flex', alignItems: 'center', fontSize: '12px', cursor: 'pointer'
+      });
 
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.style.margin = '0 4px 0 0';
       checkbox.checked = config.autoMode;
-      checkbox.addEventListener('change', (e) => {
-        config.autoMode = e.target.checked;
-        safeChrome.storage.sync.set({ autoMode: config.autoMode });
+      checkbox.addEventListener('change', async (e: Event) => {
+        if (e.target instanceof HTMLInputElement) {
+           config.autoMode = e.target.checked;
+           try {
+              // Use browser.storage.local.set
+              await browser.storage.local.set({ ...config, autoMode: config.autoMode });
+              console.log('Saved autoMode setting:', config.autoMode);
+           } catch (error: unknown) {
+              console.error('Error saving autoMode setting:', error);
+           }
+        }
       });
 
       autoToggle.appendChild(checkbox);
       autoToggle.appendChild(document.createTextNode('Auto'));
-
       buttonContainer.appendChild(button);
       buttonContainer.appendChild(autoToggle);
 
-      // Function to generate alt text
       const generateAltText = async () => {
-        button.innerHTML = ''; // Clear icon
-        button.textContent = 'Connecting...'; // Update initial state
+        button.innerHTML = '';
+        button.textContent = 'Connecting...';
         button.disabled = true;
 
-        // Find the media element (image or video) *within the specific container*
-        // **CRITICAL CHANGE**: Pass the specific `container` found earlier
-        const mediaElement = findMediaElement(container);
-        console.log('[generateAltText] Media element found within container:', mediaElement); // Changed log
+        const mediaElement = findMediaElement(validContainer);
+        console.log('[generateAltText] Media element:', mediaElement);
 
-        if (!mediaElement || !mediaElement.src) {
-            console.error('[generateAltText] Could not find media element or its src within the designated container.');
-            button.textContent = 'Error: No Media Found'; // More specific error
-            setTimeout(() => {
-              button.textContent = '';
-              button.innerHTML = originalButtonContent;
-              button.disabled = false;
-            }, 2000);
+        if (!mediaElement || !(mediaElement instanceof HTMLImageElement || mediaElement instanceof HTMLVideoElement) || !mediaElement.src) {
+            console.error('[generateAltText] Could not find valid media element or its src.');
+            button.textContent = 'Error: No Media';
+            setTimeout(() => { button.innerHTML = originalButtonContent; button.disabled = false; }, 2000);
             return;
           }
 
           const mediaUrl = mediaElement.src;
-          const isVideo = mediaElement.tagName.toLowerCase() === 'video';
+          const isVideo = mediaElement.tagName === 'VIDEO'; // Already checked instanceof
           console.log(`[generateAltText] ${isVideo ? 'Video' : 'Image'} URL:`, mediaUrl);
 
           try {
-            console.log('[generateAltText] Establishing connection to background script...');
-            const port = safeChrome.runtime.connect({ name: "altTextGenerator" });
+            console.log('[generateAltText] Connecting to background...');
+            // Use browser.runtime.connect
+            const port = browser.runtime.connect({ name: "altTextGenerator" });
             console.log('[generateAltText] Connection established.');
-            button.textContent = 'Generating...'; // Update state
+            button.textContent = 'Generating...';
 
-            port.onMessage.addListener((response) => {
-              console.log('[generateAltText] Message received from background via port:', response);
-
+            port.onMessage.addListener((response: any) => {
+              console.log('[generateAltText] Msg from background:', response);
+              let statusText = '';
+              let isError = false;
+              
               if (response.altText) {
-                // Handle success
                 textarea.value = response.altText;
                 textarea.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-                console.log('[generateAltText] Alt text inserted.');
-                button.textContent = '✓ Done';
-
-                if (config.showToasts) {
-                  createToast('Alt text generated! Please review for accuracy before posting.', 'success');
-                }
-
-                setTimeout(() => {
-                  button.textContent = '';
-                  button.innerHTML = originalButtonContent;
-                  button.disabled = false;
-                }, 1500);
+                statusText = '✓ Done';
+                if (config.showToasts) createToast('Alt text generated! Please review.', 'success');
               } else if (response.error) {
-                // Handle error from background
-                console.error('[generateAltText] Error generating alt text:', response.error);
-                button.textContent = `Error: ${response.error.substring(0, 20)}...`; // Use template literal
-
-                if (config.showToasts) {
-                  createToast(`Error: ${response.error}`, 'error'); // Use template literal
-                }
-
-                // Carefully rewritten setTimeout
-                setTimeout(() => {
-                  button.textContent = '';
-                  button.innerHTML = originalButtonContent;
-                  button.disabled = false;
-                }, 3000); // Ensure this is just the number 3000
+                const errorMsg = typeof response.error === 'string' ? response.error : 'Unknown error';
+                statusText = `Error: ${errorMsg.substring(0, 20)}...`;
+                isError = true;
+                if (config.showToasts) createToast(`Error: ${errorMsg}`, 'error');
               } else {
-                console.error('[generateAltText] Received unexpected message format from background:', response);
-                button.textContent = 'Msg Format Error';
-                setTimeout(() => {
-                  button.textContent = '';
+                statusText = 'Msg Format Err';
+                isError = true;
+                console.error('[generateAltText] Unexpected message format:', response);
+              }
+              
+              button.textContent = statusText;
+              setTimeout(() => {
                   button.innerHTML = originalButtonContent;
                   button.disabled = false;
-                }, 2000);
-              }
-              // Ensure disconnect happens *after* processing the message
-              port.disconnect(); 
+              }, isError ? 3000 : 1500);
+              
+              try { port.disconnect(); } catch (e) { /* Ignore */ }
             });
 
             port.onDisconnect.addListener(() => {
-              console.error('[generateAltText] Background port disconnected unexpectedly.', chrome.runtime.lastError || '(No error info)');
-              if (!button.textContent.includes('Done') && !button.textContent.includes('Error')) {
-                button.textContent = 'Disconnect Error';
-                setTimeout(() => {
-                  button.textContent = '';
-                  button.innerHTML = originalButtonContent;
-                  button.disabled = false;
-                }, 3000);
+              // Use browser.runtime.lastError
+              const lastError = browser.runtime.lastError;
+              console.error('[generateAltText] Port disconnected.', lastError || '(No error info)');
+              const currentText = button.textContent;
+              if (currentText && !currentText.includes('Done') && !currentText.includes('Error')) {
+                button.textContent = 'Disconnect Err';
+                setTimeout(() => { button.innerHTML = originalButtonContent; button.disabled = false; }, 3000);
               }
             });
 
-            console.log('[generateAltText] Sending message via port...');
-            port.postMessage({
-              action: 'generateAltText',
-              imageUrl: mediaUrl,
-              isVideo: isVideo
-            });
-            console.log('[generateAltText] Message sent via port.');
+            console.log('[generateAltText] Sending message...');
+            port.postMessage({ action: 'generateAltText', imageUrl: mediaUrl, isVideo: isVideo });
+            console.log('[generateAltText] Message sent.');
 
-          } catch (error) {
-            console.error('[generateAltText] Error establishing connection or posting initial message:', error);
+          } catch (error: unknown) {
+            console.error('[generateAltText] Connect/Post error:', error);
             button.textContent = 'Connect Error';
-            setTimeout(() => {
-              button.textContent = '';
-              button.innerHTML = originalButtonContent;
-              button.disabled = false;
-            }, 2000);
+            setTimeout(() => { button.innerHTML = originalButtonContent; button.disabled = false; }, 2000);
           }
       };
 
-      // Button click handler
-      button.onclick = async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        console.log('[addGenerateButton] Generate Alt Text button clicked');
+      button.onclick = async (e: MouseEvent) => {
+        e.preventDefault(); e.stopPropagation();
+        console.log('[addGenerateButton] Button clicked');
         await generateAltText();
       };
 
-      // Append the button container near the textarea
-      // Use textAreaContainer (the direct parent) for button placement
       if (textAreaContainer) {
-        console.log('[addGenerateButton] Attempting to append button container to textAreaContainer:', textAreaContainer);
-        textAreaContainer.appendChild(buttonContainer); // Append button near textarea
+        textAreaContainer.appendChild(buttonContainer);
       } else {
         console.error('[addGenerateButton] Could not find textAreaContainer to append button to.');
       }
-
-      // Mark the textarea so we don't add the button again
       textarea.dataset.geminiButtonAdded = 'true';
-
-      console.log('[addGenerateButton] Button insertion attempted.');
+      console.log('[addGenerateButton] Button setup complete.');
     }
     
-    // Helper function to find the composer container from a textarea or any element within it
-    function findComposerContainer(element) {
-      console.log('[findComposerContainer] Starting search for element:', element);
-
-      // Priority 1: Find the closest modal dialog containing the element
-      const modalDialog = element.closest('[role="dialog"][aria-modal="true"]');
-      if (modalDialog) {
-        console.log('[findComposerContainer] Found potential modal dialog:', modalDialog);
-        // Check if it seems valid (contains the element AND either image preview OR post button)
-        if (modalDialog.contains(element) &&
-            (modalDialog.querySelector('[data-testid="imagePreview"]') || modalDialog.querySelector('[data-testid="images"]') ||
-             modalDialog.querySelector('button[aria-label*="Post"], button[type="submit"]'))) {
-           console.log('[findComposerContainer] Returning: Priority 1 - Valid Modal Dialog');
-           return modalDialog;
-        } else {
-           console.warn('[findComposerContainer] Modal dialog found, but validation failed. Continuing search...');
-           // Don't return modalDialog yet if it doesn't seem right
-        }
-      } else {
-          console.log('[findComposerContainer] Priority 1: No modal dialog found.');
-      }
-
-      // Priority 2: Look for a data-testid="composer" ancestor
-      const testIdComposer = element.closest('[data-testid="composer"]');
-      if (testIdComposer) {
-        console.log('[findComposerContainer] Found potential data-testid="composer":', testIdComposer);
-        // Check if it seems valid (contains the element AND either image preview OR post button)
-        if (testIdComposer.contains(element) &&
-            (testIdComposer.querySelector('[data-testid="imagePreview"]') || testIdComposer.querySelector('[data-testid="images"]') ||
-             testIdComposer.querySelector('button[aria-label*="Post"], button[type="submit"]'))) {
-           console.log('[findComposerContainer] Returning: Priority 2 - Valid Test ID Composer');
-           return testIdComposer;
-        } else {
-           console.warn('[findComposerContainer] Test ID composer found, but validation failed. Continuing search...');
-        }
-      } else {
-           console.log('[findComposerContainer] Priority 2: No data-testid="composer" found.');
-      }
-
-
-      // Priority 3: Strict Fallback - Walk up looking for the *lowest* common ancestor
-      // containing the original element, a reliable image preview indicator, AND action buttons.
-      console.log('[findComposerContainer] Entering Priority 3: Strict Lowest Common Ancestor search...');
-      let current = element.parentElement;
-      let maxDepth = 10;
-      let commonAncestor = null;
-      const imagePreviewSelector = '[data-testid="imagePreview"] img:not([alt*="avatar"]), [data-testid="images"] img:not([alt*="avatar"])'; // Use reliable test IDs
-      const actionButtonSelector = 'button[aria-label*="Post"], button[type="submit"], button[aria-label*="Cancel"], button[aria-label*="Close"]';
-
-      while (current && current.tagName !== 'BODY' && maxDepth > 0) {
-          // Check if this level contains ALL: original element, image preview, AND action buttons
-          if (current.contains(element) &&
-              current.querySelector(imagePreviewSelector) &&
-              current.querySelector(actionButtonSelector)) {
-
-              console.log('[findComposerContainer] Found potential common ancestor:', current);
-              commonAncestor = current; // Store this level as a potential candidate
-
-              // Check if the *parent* also contains all three. If not, this 'current' is the lowest common ancestor.
-              const parent = current.parentElement;
-              if (!parent || parent.tagName === 'BODY' ||
-                  !parent.contains(element) ||
-                  !parent.querySelector(imagePreviewSelector) ||
-                  !parent.querySelector(actionButtonSelector)) {
-
-                 console.log('[findComposerContainer] Parent validation failed, selecting current as lowest common ancestor:', commonAncestor);
-                 break; // Found the boundary
-              }
-              // If parent also contains all, continue up to find the *actual* lowest
+    // Helper function to find the composer container
+    function findComposerContainer(element: Element): Element | null {
+      console.log('[findComposerContainer] Searching from:', element);
+      const selectors = [
+          '[role="dialog"][aria-modal="true"]',
+          '[data-testid="composer"]'
+      ];
+      const validationSelectors = [
+          '[data-testid="imagePreview"]', '[data-testid="images"]',
+          'button[aria-label*="Post"]', 'button[type="submit"]'
+      ];
+      
+      for (const selector of selectors) {
+          const container = element.closest<Element>(selector);
+          if (container && container.contains(element) && validationSelectors.some(vs => container.querySelector(vs))) {
+              console.log('[findComposerContainer] Found valid container via selector:', selector, container);
+              return container;
           }
-          maxDepth--;
-          current = current.parentElement;
       }
-
-      if (commonAncestor) {
-          console.log('[findComposerContainer] Returning: Priority 3 - Lowest Common Ancestor');
-          return commonAncestor;
-      } else {
-          console.log('[findComposerContainer] Priority 3: No suitable common ancestor found.');
+      console.log('[findComposerContainer] No primary container found, trying fallback parent check.');
+      // Fallback: simple parent check (less reliable)
+      const fallback = element.parentElement?.parentElement || element.parentElement;
+      if (fallback) {
+           console.warn('[findComposerContainer] Using fallback container:', fallback);
+           return fallback;
       }
-
-      // Last Resort:
-      const fallback = modalDialog || testIdComposer || element.parentElement?.parentElement || element.parentElement; // Try modal/testid again before simple parent
-      console.error('[findComposerContainer] Returning: Last Resort Fallback:', fallback);
-      return fallback;
+      console.error('[findComposerContainer] Failed to find any container.');
+      return null;
     }
     
     // Watch for media uploads to trigger auto-generation
     const observeMediaElements = () => {
       const mediaObserver = new MutationObserver(mutations => {
+        if (!config.autoMode) return; // Only process if auto mode is on
+        
         for (const mutation of mutations) {
           if (mutation.type === 'childList') {
             mutation.addedNodes.forEach(node => {
-              if (node.nodeType === Node.ELEMENT_NODE) {
-                const element = node as Element;
-                // Check if this is a media element
-                if ((element.tagName === 'IMG' || element.tagName === 'VIDEO') && 
-                    !element.getAttribute('alt')?.includes('avatar')) {
-                  console.log('Media element detected:', element);
-                  
-                  // If auto mode is enabled, find the closest alt text field and generate
-                  if (config.autoMode) {
-                    // First check if this is inside a composer
-                    const container = element.closest('[data-testid="composer"], [role="dialog"], .css-175oi2r');
-                    if (container) {
-                      // Try to find the alt text field
-                      setTimeout(() => {
-                        // Wait a bit for alt text field to be added to the DOM
-                        const textarea = container.querySelector(ALT_TEXT_SELECTOR) as HTMLTextAreaElement;
-                        if (textarea) {
-                          // Make sure our button is added
-                          addGenerateButton(textarea);
-                          
-                          // Find the button and click it to trigger generation
-                          const button = container.querySelector(`#${BUTTON_ID}`) as HTMLButtonElement;
-                          if (button && !button.disabled) {
-                            console.log('Auto-generating alt text for newly added media');
-                            button.click();
-                          }
-                        } else {
-                          console.log('No alt text field found for auto-generation');
-                          // Try to observe for the alt text field appearing
-                          const fieldWatcher = new MutationObserver((mutations) => {
-                            for (const mutation of mutations) {
-                              if (mutation.type === 'childList') {
-                                const altTextArea = container.querySelector(ALT_TEXT_SELECTOR) as HTMLTextAreaElement;
-                                if (altTextArea) {
-                                  addGenerateButton(altTextArea);
-                                  const button = container.querySelector(`#${BUTTON_ID}`) as HTMLButtonElement;
+              if (node instanceof HTMLElement) { // Check if node is HTMLElement
+                const checkElement = (element: HTMLElement) => {
+                   if ((element.tagName === 'IMG' || element.tagName === 'VIDEO') && !element.getAttribute('alt')?.includes('avatar')) {
+                      console.log('Auto-gen: Media element detected:', element);
+                      const container = findComposerContainer(element);
+                      if (container) {
+                          setTimeout(() => {
+                              const textarea = container.querySelector<HTMLTextAreaElement>(ALT_TEXT_SELECTOR);
+                              if (textarea) {
+                                  addGenerateButton(textarea); // Ensure button exists
+                                  const button = container.querySelector<HTMLButtonElement>(`#${BUTTON_ID}`);
                                   if (button && !button.disabled) {
-                                    console.log('Alt text field found after waiting, auto-generating');
-                                    button.click();
-                                    fieldWatcher.disconnect();
+                                      console.log('Auto-generating alt text for:', element);
+                                      button.click();
                                   }
-                                }
+                              } else {
+                                  console.log('Auto-gen: No alt text field found yet for media:', element);
+                                  // Optional: could add a temporary observer here if needed
                               }
-                            }
-                          });
-                          
-                          // Watch for the alt text field to appear
-                          fieldWatcher.observe(container, { childList: true, subtree: true });
-                          // Disconnect after 5 seconds to prevent indefinite observation
-                          setTimeout(() => fieldWatcher.disconnect(), 5000);
-                        }
-                      }, 500);
-                    }
-                  }
-                }
+                          }, 500); // Delay to allow alt text field to render
+                      }
+                   }
+                };
+                
+                // Check the added node itself
+                checkElement(node);
+                // Check children if the added node is a container
+                node.querySelectorAll<HTMLElement>('img, video').forEach(checkElement);
               }
             });
           }
         }
       });
-      
-      // Observe the whole document for media elements being added
       mediaObserver.observe(document.body, { childList: true, subtree: true });
+      console.log('Media observer started for auto-generation.');
     };
     
-    // Process existing textareas
-    document.querySelectorAll(ALT_TEXT_SELECTOR).forEach(textarea => {
-      addGenerateButton(textarea as HTMLTextAreaElement);
-    });
+    // Process existing textareas on load
+    document.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR).forEach(addGenerateButton);
     
     // Watch for dynamically added textareas
-    const observer = new MutationObserver(mutations => {
-      console.log('MutationObserver callback triggered.'); // Log observer activity
+    const mainObserver = new MutationObserver(mutations => {
+      console.log('Main observer triggered.');
       for (const mutation of mutations) {
         if (mutation.type === 'childList') {
           mutation.addedNodes.forEach(node => {
-            // Check if the added node is an element
-            if (node.nodeType === Node.ELEMENT_NODE) {
-              const element = node as Element; // Type assertion
-              // Check if it's the textarea itself
-              if (element.matches && element.matches(ALT_TEXT_SELECTOR)) {
-                console.log('Observer found matching textarea directly:', element);
-                addGenerateButton(element as HTMLTextAreaElement);
+            if (node instanceof Element) { // Check node type
+              if (node.matches(ALT_TEXT_SELECTOR)) {
+                addGenerateButton(node as HTMLTextAreaElement);
               } 
-              // Check if it contains any matching textareas
-              else if (element.querySelectorAll) {
-                element.querySelectorAll(ALT_TEXT_SELECTOR).forEach(textarea => {
-                  console.log('Observer found matching textarea within added node:', textarea);
-                  addGenerateButton(textarea as HTMLTextAreaElement);
-                });
-              }
+              node.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR).forEach(addGenerateButton);
             }
           });
         }
       }
     });
     
-    // Start observing
-    observer.observe(document.body, { childList: true, subtree: true });
+    mainObserver.observe(document.body, { childList: true, subtree: true });
     observeMediaElements();
 
-    // --- START: Functions to attach listeners ---
+    // Attach listeners for drag/drop and file input events
+    const attachMediaListeners = (composerElement: Element) => {
+        console.log('[attachMediaListeners] Attaching to:', composerElement);
+        
+        const fileInput = composerElement.querySelector<HTMLInputElement>(FILE_INPUT_SELECTOR);
+        const dropZone = composerElement.closest<HTMLElement>(DROP_ZONE_SELECTOR) || (composerElement instanceof HTMLElement ? composerElement : null);
 
-    // Attach listeners to a specific composer instance
-    const attachMediaListeners = (composerElement) => {
-        console.log('Attempting to attach media listeners to:', composerElement);
-        const fileInput = composerElement.querySelector(FILE_INPUT_SELECTOR);
-        const dropZone = composerElement.querySelector(DROP_ZONE_SELECTOR) || composerElement; // Fallback to composer itself
-
-        if (fileInput && !fileInput.dataset.mediaListenerAttached) {
-            console.log('Attaching CHANGE listener to file input:', fileInput);
-            fileInput.addEventListener('change', (event) => {
-                console.log('File input CHANGED');
-                handleFiles((event.target as HTMLInputElement)?.files);
-            });
-            fileInput.dataset.mediaListenerAttached = 'true'; // Mark as attached
-        } else if (!fileInput) {
-             console.warn('Could not find file input with selector:', FILE_INPUT_SELECTOR, 'within', composerElement);
-        } else {
-            console.log('Change listener already attached to file input.');
-        }
-
-        if (dropZone && !dropZone.dataset.dropListenerAttached) {
-            console.log('Attaching DROP/DRAGOVER listeners to drop zone:', dropZone);
-            
-            // Prevent default behavior for dragover to allow drop
-            dropZone.addEventListener('dragover', (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                 // Optional: Add visual feedback
-                // dropZone.style.border = '2px dashed blue'; 
-            });
-
-            // Optional: Reset visual feedback on drag leave
-            // dropZone.addEventListener('dragleave', (event) => {
-            //    dropZone.style.border = ''; 
-            // });
-
-            dropZone.addEventListener('drop', (event) => {
-                console.log('DROP event detected');
-                event.preventDefault();
-                event.stopPropagation();
-                // dropZone.style.border = ''; // Reset visual feedback
-                if (event.dataTransfer?.files) {
-                    handleFiles(event.dataTransfer.files);
-                } else {
-                    console.log('No files found in dataTransfer.');
+        const fileInputEl = fileInput as HTMLElement | null;
+        if (fileInputEl && !fileInputEl.dataset.mediaListenerAttached) {
+            fileInputEl.addEventListener('change', (event: Event) => {
+                if (event.target instanceof HTMLInputElement) {
+                    console.log('[attachMediaListeners] File input CHANGED');
+                    handleFiles(event.target.files);
                 }
             });
-            dropZone.dataset.dropListenerAttached = 'true'; // Mark as attached
-        } else if (!dropZone) {
-             console.warn('Could not find drop zone with selector:', DROP_ZONE_SELECTOR);
+            fileInputEl.dataset.mediaListenerAttached = 'true';
+            console.log('[attachMediaListeners] Change listener attached to file input.');
+        } else if (fileInputEl) {
+             console.log('[attachMediaListeners] Change listener already attached to file input.');
         } else {
-             console.log('Drop/Dragover listeners already attached to drop zone.');
+             console.warn('[attachMediaListeners] Could not find file input using selector:', FILE_INPUT_SELECTOR, 'within:', composerElement);
+        }
+
+        const dropZoneEl = dropZone as HTMLElement | null;
+        if (dropZoneEl && !dropZoneEl.dataset.dropListenerAttached) {
+            dropZoneEl.addEventListener('dragover', (event: DragEvent) => {
+                event.preventDefault(); event.stopPropagation();
+            });
+            dropZoneEl.addEventListener('drop', (event: DragEvent) => {
+                event.preventDefault(); event.stopPropagation();
+                console.log('[attachMediaListeners] DROP event detected');
+                if (event.dataTransfer?.files) {
+                    handleFiles(event.dataTransfer.files);
+                }
+            });
+            dropZoneEl.dataset.dropListenerAttached = 'true';
+            console.log('[attachMediaListeners] Drop/Dragover listeners attached to drop zone:', dropZoneEl);
+        } else if (dropZoneEl) {
+             console.log('[attachMediaListeners] Drop/Dragover listeners already attached.');
+        } else {
+             console.warn('[attachMediaListeners] Could not find drop zone using selector:', DROP_ZONE_SELECTOR);
         }
     };
 
-    // Observe the document for composer elements appearing
+    // Observe for composer elements appearing to attach listeners
     const observeForComposer = () => {
-        console.log('Setting up observer for composer elements');
-        const observer = new MutationObserver((mutationsList) => {
+        console.log('Setting up observer for composer elements...');
+        const composerObserver = new MutationObserver((mutationsList) => { 
             for (const mutation of mutationsList) {
                 if (mutation.type === 'childList') {
                     mutation.addedNodes.forEach(node => {
-                        if (node.nodeType === Node.ELEMENT_NODE) {
-                            const element = node as Element;
-                            // Check if the added node itself is a composer
-                            if (element.matches(COMPOSER_SELECTOR)) {
-                                console.log('Composer element added directly:', element);
-                                attachMediaListeners(element);
+                        if (node instanceof Element) {
+                            if (node.matches(COMPOSER_SELECTOR)) {
+                                console.log('Composer added directly:', node);
+                                attachMediaListeners(node);
                             }
-                            // Check if a composer exists within the added node
-                            element.querySelectorAll(COMPOSER_SELECTOR).forEach(composer => {
-                                console.log('Found composer element via querySelectorAll:', composer);
+                            node.querySelectorAll<Element>(COMPOSER_SELECTOR).forEach(composer => {
+                                console.log('Composer found via querySelectorAll:', composer);
                                 attachMediaListeners(composer);
                             });
                         }
@@ -902,21 +589,14 @@ export default defineContentScript({
                 }
             }
         });
-
-        observer.observe(document.body, { childList: true, subtree: true });
-        console.log('MutationObserver started for composer.');
-
-        // Also check for existing composer elements on script load
-        document.querySelectorAll(COMPOSER_SELECTOR).forEach(composer => {
-            console.log('Found existing composer on load:', composer);
-            attachMediaListeners(composer);
-        });
+        composerObserver.observe(document.body, { childList: true, subtree: true });
+        console.log('Composer observer started.');
+        
+        // Check existing on load
+        document.querySelectorAll<Element>(COMPOSER_SELECTOR).forEach(attachMediaListeners);
     };
 
-    // --- END: Functions to attach listeners ---
-
     // --- START: Call the observer setup ---
-    // Make sure this runs after the DOM is potentially ready
     if (document.readyState === 'complete' || document.readyState === 'interactive') {
        observeForComposer();
     } else {
