@@ -2,19 +2,18 @@
 
 ![Extension Icon](./public/icon/gen-alt-text.svg)
 
-This browser extension automatically generates detailed, accessible alt text for images and videos you add to posts on Bluesky, using Google Gemini AI.
+This browser extension helps you generate detailed, accessible alt text for images and videos you add to posts on Bluesky, using Google Gemini AI.
 
 ## Features
 
-*   **Automatic Alt Text Generation:** Get suggested alt text instantly when you upload media.
-*   **Manual Generation:** Click the ✨ icon next to the alt text field to generate text on demand.
-*   **Auto-Mode:** Automatically opens the alt text input and generates text when media is added (configurable).
-*   **Configurable:** Enable/disable auto-mode and notification toasts via the extension popup.
+*   **Manual Generation:** Adds a ✨ button next to alt text fields on bsky.app. Click it to generate text on demand.
+*   **Supports Images & Videos:** Can generate alt text based on the content of both image and video uploads.
+*   **Toast Notifications:** Displays a confirmation message after generation, reminding you to review the text.
 *   **Privacy-Focused:** Media processing happens via the secure Google AI API.
 
 ## Installation
 
-*(Instructions for installing from Chrome Web Store / Firefox Add-ons or loading as an unpacked extension will go here)*
+*(Instructions for installing from Chrome Web Store / Firefox Add-ons will go here)*
 
 1.  **From Store (Recommended):**
     *   Coming Soon!
@@ -30,16 +29,13 @@ This browser extension automatically generates detailed, accessible alt text for
 ## Usage
 
 1.  Once installed, the extension is active on `bsky.app`.
-2.  **Manual Mode:** When you upload an image or video and open the alt text input field (usually by clicking "ALT" or a similar button), you will see a ✨ icon appear. Click this icon to generate alt text.
-3.  **Auto-Mode:** If enabled in the extension popup, when you add an image or video to a post, the extension will attempt to automatically open the alt text input and generate text.
-4.  **Review:** Always review the generated alt text before posting! AI can make mistakes.
+2.  When you upload an image or video and open the alt text input field (usually by clicking "ALT" or a similar button on the media preview), you will see a ✨ icon appear next to the text area.
+3.  Click this icon to generate alt text based on the media.
+4.  **Review:** Always review the generated alt text before posting! AI can make mistakes. The generated text will appear in the input field, and a toast notification will confirm success or report errors.
 
 ## Configuration
 
-Click the extension icon in your browser toolbar to open the popup. Here you can:
-
-*   Toggle **Auto-generate mode** on or off.
-*   Toggle **Show notifications** (toasts) on or off.
+There are no configurable options. The extension automatically adds the generate button to relevant fields on bsky.app.
 
 ## Contributing
 

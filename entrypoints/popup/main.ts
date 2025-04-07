@@ -10,30 +10,15 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       Automatically generate detailed, accessible alt text for your Bluesky images using Google Gemini AI.
     </div>
     
-    <div class="options-section">
-      <h2>Options</h2>
-      
-      <div class="option-row">
-        <label class="toggle-switch">
-          <input type="checkbox" id="autoMode">
-          <span class="toggle-slider"></span>
-        </label>
-        <div class="option-text">
-          <h3>Auto-generate mode</h3>
-          <p>Automatically generate alt text when images or videos are added</p>
-        </div>
-      </div>
-      
-      <div class="option-row">
-        <label class="toggle-switch">
-          <input type="checkbox" id="showToasts" checked>
-          <span class="toggle-slider"></span>
-        </label>
-        <div class="option-text">
-          <h3>Show notifications</h3>
-          <p>Display reminders to check generated text before posting</p>
-        </div>
-      </div>
+    <div class="info-section">
+      <h2>How it Works</h2>
+      <p>
+        This extension automatically adds a ✨ button next to alt text input fields on bsky.app. 
+        Click the button to generate alt text for the associated image or video.
+      </p>
+       <p>
+        Remember to always review the generated text before posting!
+      </p>
     </div>
     
     <div class="footer">
