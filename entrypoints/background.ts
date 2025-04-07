@@ -27,80 +27,52 @@ export default defineBackground(() => {
   }
   
   // Store the custom instructions
-  const imageInstructions = `You will be provided with images. For each image, your task is to generate alternative text (alt-text) that describes the image's content and context. This alt-text is intended for use with screen reader technology, assisting individuals who are blind or visually impaired to understand the image. Adhere to the following guidelines strictly:
+  const systemInstructions = `You will be provided with visual media (either a still image or a video file). Your task is to generate alternative text (alt-text) that describes the media\'s content and context. This alt-text is intended for use with screen reader technology, assisting individuals who are blind or visually impaired to understand the visual information. Adhere to the following guidelines strictly:
 
-1.  **Content and Purpose:**
-    *   Describe the image's content accurately and thoroughly. Explain the image in the context that it is presented.
-    *   Convey the image's purpose. Why is this image included? What information is it trying to present? What is the core message?
+1.  **Media Type Identification:**
+    *   Begin by identifying the type of media. For images, note if it is a "photograph", "painting", "illustration", "diagram", "screenshot", "comic panel", etc. For videos, start the description with "Video describing...".
+
+2.  **Content and Purpose:**
+    *   Describe the visual content accurately and thoroughly. Explain the media in the context that it is presented.
+    *   Convey the media\'s purpose. Why is this included? What information is it trying to present? What is the core message?
     *   Prioritize the most important information, placing it at the beginning of the alt-text.
     *   If the image serves a specific function (e.g., a button or a link), describe the function. Example: "Search button" or "Link to the homepage".
-    * Note if this image is a, "photograph", "painting", "illustration", "diagram", or otherwise.
 
-2.  **Text within the Image:**
-    *   If the image contains text, transcribe the text *verbatim* within the alt-text. Indicate that this is a direct quote from the image by using quotation marks. Example: 'A sign that reads, "Welcome to Our Store. Open 24/7".'
-    *    If the image contain a large block of text, such as a screenshot of an article, again, we must ALWAY, *verbatim*, quote the image, up to 2000 characters.
-    *    For screenshots with UI elements, exercise careful judgment. Omit minor UI text (e.g., menu item hover text, tooltips) that doesn't contribute significantly to understanding the core content of the screenshot. Focus on describing the main UI elements and their states (e.g., "A webpage with a navigation menu expanded, showing options for 'Home', 'About', and 'Contact'.").
+3.  **Video-Specific Instructions:**
+    *   For videos, describe the key visual elements, actions, scenes, and any text overlays that appear throughout the *duration* of the video playback. Focus on conveying the narrative or informational flow presented visually. Do *not* just describe a single frame or thumbnail.
 
-3.  **Brevity and Clarity:**
-    *   Keep descriptions concise, ideally under 100-125 characters where possible, *except* when transcribing text within the image. Longer text transcriptions take precedence over brevity.
-    *   Use clear, simple language. Avoid jargon or overly technical terms unless they are essential to the image's meaning and present within the image itself.
+4.  **Sequential Art (Comics/Webcomics):**
+    *   For media containing sequential art like comic panels or webcomics, describe the narrative progression. Detail the actions, characters, settings, and dialogue/captions within each panel or across the sequence to tell the story visually represented.
+
+5.  **Text within the Media:**
+    *   If the media contains text (e.g., signs, labels, captions, text overlays in videos), transcribe the text *verbatim* within the alt-text. Indicate that this is a direct quote by using quotation marks. Example: \'A sign that reads, "Proceed with Caution".\'
+    *   **Crucially**, if the media consists primarily of a large block of text (e.g., a screenshot of an article, a quote graphic, a presentation slide), you MUST transcribe the *entire* text content verbatim, up to a practical limit (e.g., 2000 characters). Accuracy and completeness of the text take precedence over brevity in these cases.
+    *   For screenshots containing User Interface (UI) elements, transcribe essential text (button labels, input field values, key menu items). Exercise judgment to omit minor or redundant UI text (tooltips, decorative labels) that doesn\'t significantly contribute to understanding the core function or state shown. Example: "Screenshot of a software settings window. The \'Notifications\' tab is active, showing a checkbox labeled \\"Enable desktop alerts\\" which is checked."
+
+6.  **Brevity and Clarity:**
+    *   Keep descriptions concise *except* when transcribing significant amounts of text or describing sequential narratives (comics, videos), where clarity and completeness are more important. Aim for under 125 characters for simple images where possible.
+    *   Use clear, simple language. Avoid jargon unless it\'s part of transcribed text or essential to the meaning.
     *   Use proper grammar, punctuation, and capitalization. End sentences with a period.
 
-4.  **Notable Individuals:**
-    *   If the image contains recognizable people, identify them by name. If their role or title is relevant to the image's context, include that as well. Example: "Photo of Barack Obama, former President of the United States, giving a speech."
+7.  **Notable Individuals:**
+    *   If the media features recognizable people, identify them by name. If their role or title is relevant, include that too. Example: "Photograph of Dr. Jane Goodall observing chimpanzees."
 
-5.  **Inappropriate or Sensitive Content:**
-    *   If an image depicts content that is potentially inappropriate, offensive, or harmful, maintain a professional and objective tone.
-    *   Use clinical and descriptive language, avoiding overly graphic or sensationalized phrasing. Focus on conveying the factual content of the image without unnecessary embellishment. Strive for a PG-13 level of description.
+8.  **Inappropriate or Sensitive Content:**
+    *   If the media depicts potentially sensitive, offensive, or harmful content, maintain a professional, objective, and clinical tone.
+    *   Describe the factual visual content accurately but avoid graphic or sensationalized language. Aim for a descriptive level appropriate for a general audience (e.g., PG-13).
 
-6.  **Output Format:**
-    *   Provide *only* the image description. Do *not* include any introductory phrases (e.g., "The image shows...", "Alt-text:"), conversational elements ("Here's the description"), or follow-up statements ("Let me know if you need..."). Output *just* the descriptive text.
+9.  **Output Format:**
+    *   Provide *only* the descriptive alt-text. Do *not* include any introductory phrases (e.g., "The image shows...", "Alt-text:"), conversational filler, or follow-up statements. Output *just* the description.
 
-7.  **Decorative Images:**
-    *   If the image is purely decorative and provides no information, do not supply alt-text. Leave it empty. But make certain that the image is, for a fact, not providing any value before doing so.
+10. **Decorative Media:**
+    *   If an image is purely decorative and adds no informational value (e.g., a background pattern), provide empty alt-text (\`alt=""\`). Be certain it provides no value before doing so. Videos are generally not decorative.
 
-8. **Do Not's:**
-    * Do not begin alt text with, "Image of..", or similar phrasing, it is already implied.
-    * Do not add additional information that is not directly shown within the image.
-    * Do not repeat information that already exists in adjacent text.
+11. **Do Not\'s:**
+    * Do not begin descriptions with generic phrases like "Image of...", "Video of...", etc., unless specifying the type as in Guideline 1.
+    * Do not add external information, interpretations, or assumptions not directly represented in the visual media itself.
+    * Do not repeat information already present in surrounding text content on the page.
 
-By consistently applying these guidelines, you will create alt-text that is informative, concise, and helpful for users of assistive technology.`;
-
-  // Store video-specific instructions
-  const videoInstructions = `You will be provided with a video thumbnail image. Your task is to generate alternative text (alt-text) that describes the video's content and context based on this thumbnail. This alt-text is intended for use with screen reader technology, assisting individuals who are blind or visually impaired to understand what the video is about. Adhere to the following guidelines strictly:
-
-1.  **Video Thumbnail Content:**
-    *   Describe what can be seen in the video thumbnail accurately and thoroughly.
-    *   Mention that this is a "video thumbnail" at the beginning of your description.
-    *   If the thumbnail shows a frame from the video, describe the scene, setting, people, and any visible action.
-    *   If the thumbnail has a custom cover image or title card, describe that and indicate it's a cover image.
-
-2.  **Text within the Thumbnail:**
-    *   If the thumbnail contains text such as a title, caption, or other information, transcribe this text *verbatim* within the alt-text.
-    *   Example: 'Video thumbnail showing a cooking demonstration with text overlay reading, "5-Minute Pasta Recipe".'
-    *   Indicate that this is a direct quote by using quotation marks.
-
-3.  **Brevity and Clarity:**
-    *   Keep descriptions concise, ideally under 100-125 characters where possible, *except* when transcribing text within the thumbnail.
-    *   Use clear, simple language. Avoid jargon or overly technical terms unless they are essential.
-    *   Use proper grammar, punctuation, and capitalization. End sentences with a period.
-
-4.  **Notable Individuals:**
-    *   If the thumbnail shows recognizable people, identify them by name if possible. Example: "Video thumbnail featuring Taylor Swift performing on stage."
-
-5.  **Indicators of Video Content:**
-    *   Note any visual cues that indicate the video's content or genre (e.g., play button overlay, duration indicator, channel name).
-    *   If the thumbnail gives clear indication of what the video contains, include that information.
-
-6.  **Output Format:**
-    *   Provide *only* the video thumbnail description. Do not include any introductory phrases, conversational elements, or follow-up statements. Output *just* the descriptive text.
-
-7. **Do Not's:**
-    * Do not speculate extensively about what might be in the full video beyond what is visible in the thumbnail.
-    * Do not add additional information that is not directly shown within the thumbnail.
-    * Do not repeat information that already exists in adjacent text.
-
-By consistently applying these guidelines, you will create alt-text for video thumbnails that is informative, concise, and helpful for users of assistive technology.`;
+By consistently applying these guidelines, you will create alt-text that is informative, accurate, concise where appropriate, and genuinely helpful for users of assistive technology across different types of visual media.`;
   
   // --- Helper function to extract Base64 data --- 
   // Handles both data URLs and fetching blob/http URLs
@@ -171,7 +143,7 @@ By consistently applying these guidelines, you will create alt-text for video th
 
           // 2. Call Gemini API
           const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
-          const instructions = isVideo ? videoInstructions : imageInstructions;
+          const instructions = systemInstructions;
           
           const geminiRequestBody = {
               contents: [{

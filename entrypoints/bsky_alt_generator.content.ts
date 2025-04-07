@@ -57,10 +57,21 @@ export default defineContentScript({
     // Use browser.storage.onChanged
     browser.storage.onChanged.addListener((changes, areaName) => {
         if (areaName === 'local') {
-            let changed = false;
-            if (changes.autoMode) { config.autoMode = changes.autoMode.newValue; changed = true; }
-            if (changes.showToasts) { config.showToasts = changes.showToasts.newValue; changed = true; }
-            if (changed) console.log('Updated config via storage listener:', config);
+            let configChanged = false;
+            if (changes.autoMode) { 
+                config.autoMode = changes.autoMode.newValue; 
+                configChanged = true; 
+                console.log('[Storage Listener] autoMode changed to:', config.autoMode);
+            }
+            if (changes.showToasts) { 
+                config.showToasts = changes.showToasts.newValue; 
+                configChanged = true; // Although this doesn't affect observers, mark change
+                console.log('[Storage Listener] showToasts changed to:', config.showToasts);
+            }
+            // If autoMode changed, re-evaluate which observer should be active
+            if (changes.autoMode) {
+                observeDOMChanges(); 
+            }
         }
     });
     // --- END: Listen for config changes ---
@@ -113,8 +124,161 @@ export default defineContentScript({
     };
     // --- END: Function to handle and send files ---
     
+    // --- START: Auto Mode Helper Functions ---
+    
+    // Function to find the button that opens the alt text input for a given media element
+    const findAltTextTriggerButton = (mediaElement: Element): HTMLButtonElement | null => {
+      // Search hierarchy: near the media, then in its composer container
+      const searchAreas: (Element | null)[] = [
+        mediaElement.closest('[data-testid="imagePreview"]'), // Common image preview container
+        mediaElement.closest('[data-testid="videoPreview"]'), // Common video preview container
+        mediaElement.closest('[data-testid*="composer"]'), // General composer area
+        document.body // Fallback: Search the whole body (less reliable)
+      ];
+
+      const buttonSelectors = [
+        'button[aria-label*="alt text" i]',
+        'button[title*="alt text" i]',
+        'button:has(svg[aria-label*="alt" i])', // Button containing an icon with "alt" label
+        'button:contains("ALT")', // Button with text "ALT"
+        'button:contains("Add alt text")'
+      ];
+
+      for (const area of searchAreas) {
+        if (!area) continue;
+        for (const selector of buttonSelectors) {
+          try {
+            const button = area.querySelector<HTMLButtonElement>(selector);
+            if (button && button.offsetParent !== null) { // Check if visible
+              console.log(`[findAltTextTriggerButton] Found button with selector "${selector}" near`, mediaElement, button);
+              return button;
+            }
+          } catch (e) { /* Ignore invalid selectors */ }
+        }
+      }
+      console.warn('[findAltTextTriggerButton] Could not find alt text trigger button for', mediaElement);
+      return null;
+    };
+
+    // Helper to safely click an element
+    const clickElement = (element: HTMLElement | null) => {
+      if (element && typeof element.click === 'function') {
+        console.log('[clickElement] Clicking:', element);
+        element.click();
+        return true;
+      } else {
+        console.warn('[clickElement] Element not found or not clickable:', element);
+        return false;
+      }
+    };
+
+    // Function to wait for the alt text input to appear and then trigger our generation button
+    const waitForAltTextInputAndGenerate = (triggerButton: HTMLElement) => {
+        console.log('[waitForAltTextInputAndGenerate] Waiting for alt text input after clicking:', triggerButton);
+        const checkInterval = 100; // Check every 100ms
+        const maxWaitTime = 5000; // Wait max 5 seconds
+        let timeWaited = 0;
+
+        const intervalId = setInterval(() => {
+            timeWaited += checkInterval;
+            
+            // Look for the alt text textarea, likely within a dialog opened by the trigger button
+            const altTextDialog = document.querySelector('[role="dialog"] [aria-label*="alt text" i]'); // Common pattern
+            let altTextArea: HTMLTextAreaElement | null = null;
+            if(altTextDialog) {
+                altTextArea = altTextDialog.querySelector('textarea');
+            }
+            // Fallback: Search anywhere (less reliable)
+            if (!altTextArea) {
+                 altTextArea = document.querySelector<HTMLTextAreaElement>(ALT_TEXT_SELECTOR);
+            }
+
+            if (altTextArea && altTextArea.offsetParent !== null) { // Found and visible
+                console.log('[waitForAltTextInputAndGenerate] Found alt text textarea:', altTextArea);
+                clearInterval(intervalId);
+                
+                // Now find *our* generate button associated with this textarea
+                // It might not be added yet, so wait briefly if needed
+                let generateButton: HTMLButtonElement | null = altTextArea.parentElement?.querySelector(`#${BUTTON_ID}`) || null;
+                
+                if (generateButton && generateButton.offsetParent !== null) {
+                    console.log('[waitForAltTextInputAndGenerate] Found our generate button, clicking:', generateButton);
+                    clickElement(generateButton);
+                } else {
+                    // Button might need a moment to be injected by the other observer
+                    console.warn('[waitForAltTextInputAndGenerate] Generate button not immediately found, will retry shortly...');
+                    setTimeout(() => {
+                        const finalTryButton = altTextArea?.parentElement?.querySelector<HTMLButtonElement>(`#${BUTTON_ID}`);
+                        if(finalTryButton && finalTryButton.offsetParent !== null) {
+                            console.log('[waitForAltTextInputAndGenerate] Found generate button on retry, clicking:', finalTryButton);
+                            clickElement(finalTryButton);
+                        } else {
+                             console.error('[waitForAltTextInputAndGenerate] Failed to find our generate button near textarea after retry:', altTextArea);
+                        }
+                    }, 500); // Wait 500ms more
+                }
+            } else if (timeWaited >= maxWaitTime) {
+                console.error('[waitForAltTextInputAndGenerate] Timed out waiting for alt text textarea.');
+                clearInterval(intervalId);
+            }
+        }, checkInterval);
+    };
+
+    // Observer specifically for Auto Mode: Watches for new media additions
+    let autoModeMediaObserver: MutationObserver | null = null;
+    const observeMediaForAutoMode = () => {
+      if (autoModeMediaObserver) autoModeMediaObserver.disconnect(); // Disconnect previous if exists
+
+      console.log('[observeMediaForAutoMode] Starting observer for media additions.');
+      autoModeMediaObserver = new MutationObserver((mutations) => {
+        if (!config.autoMode) return; // Double check config
+
+        for (const mutation of mutations) {
+          if (mutation.type === 'childList') {
+            mutation.addedNodes.forEach((node) => {
+              if (node instanceof HTMLElement) {
+                // Check if the node itself is media or contains media
+                const mediaElements = (node.matches('img[src], video[src]'))
+                  ? [node as HTMLImageElement | HTMLVideoElement] 
+                  : Array.from(node.querySelectorAll<HTMLImageElement | HTMLVideoElement>('img[src], video[src]'));
+
+                mediaElements.forEach((mediaElement) => {
+                  // Basic check: Avoid tiny icons/avatars, ensure it has dimensions
+                  if (mediaElement.offsetWidth < 50 || mediaElement.offsetHeight < 50 || mediaElement.closest('[data-testid*="avatar"]')) {
+                    console.log('[observeMediaForAutoMode] Skipping small/avatar media:', mediaElement);
+                    return;
+                  }
+                  
+                  // Avoid processing if already handled (e.g., multiple mutations for same element)
+                  if ((mediaElement as any)._autoAltTriggered) return;
+                  (mediaElement as any)._autoAltTriggered = true; // Mark as handled
+                  console.log('[observeMediaForAutoMode] Detected new media:', mediaElement);
+
+                  // Find and click the "Add Alt Text" button for this media
+                  const altTriggerButton = findAltTextTriggerButton(mediaElement);
+                  if (clickElement(altTriggerButton)) {
+                    // If click succeeded, wait for the input and trigger generation
+                    waitForAltTextInputAndGenerate(altTriggerButton!); // We know it's not null if click succeeded
+                  }
+                  
+                  // Cleanup the flag after a delay to allow reprocessing if needed (e.g., UI redraws)
+                  setTimeout(() => { delete (mediaElement as any)._autoAltTriggered; }, 3000);
+                });
+              }
+            });
+          }
+        }
+      });
+
+      // Observe the entire body, looking for nodes added anywhere
+      autoModeMediaObserver.observe(document.body, { childList: true, subtree: true });
+      console.log('[observeMediaForAutoMode] Observer attached to document body.');
+    };
+    
+    // --- END: Auto Mode Helper Functions ---
+
     // Toast notification system
-    const createToast = (message: string, type: 'info' | 'success' | 'error' | 'warning' = 'info', duration: number = 5000) => {
+    const createToast = (message: string, type: 'info' | 'success' | 'error' | 'warning' = 'info', duration: number = 8000) => {
       let toastContainer = document.getElementById('gemini-toast-container');
       if (!toastContainer) {
         toastContainer = document.createElement('div');
@@ -415,7 +579,10 @@ export default defineContentScript({
       const button = document.createElement('button');
       button.id = BUTTON_ID;
       button.title = 'Generate Alt Text';
-      button.innerHTML = `<svg width="20" height="20" viewBox="-5 -10 128 128" xmlns="http://www.w3.org/2000/svg"><path d="M 35.746,4 C 20.973,4 9,15.973 9,30.746 V 77.254 C 9,92.027 20.973,104 35.746,104 H 82.254 C 97.027,104 109,92.027 109,77.254 V 30.746 C 109,15.973 97.027,4 82.254,4 Z m -19.77,26.746 c 0,-10.918 8.8516,-19.77 19.77,-19.77 h 46.508 c 10.918,0 19.77,8.8516 19.77,19.77 v 46.508 c 0,10.918 -8.8516,19.77 -19.77,19.77 H 35.746 c -10.918,0 -19.77,-8.8516 -19.77,-19.77 z m 45.609,0.37891 c -1.082,-2.1055 -4.0898,-2.1055 -5.1719,0 l -4.3242,8.4219 c -1.668,3.2383 -4.3047,5.875 -7.543,7.543 l -8.4219,4.3242 c -2.1055,1.082 -2.1055,4.0898 0,5.1719 l 8.4219,4.3242 c 3.2383,1.668 5.875,4.3047 7.543,7.543 l 4.3242,8.4219 c 1.082,2.1055 4.0898,2.1055 5.1719,0 l 4.3242,-8.4219 c 1.668,-3.2383 4.3047,-5.875 7.543,-7.543 l 8.4219,-4.3242 c 2.1055,-1.082 2.1055,-4.0898 0,-5.1719 l -8.4219,-4.3242 c -3.2383,-1.668 -5.875,-4.3047 -7.543,-7.543 z" fill="#323248" stroke="none" /></svg>`;
+      // --- START: Use img tag for icon ---
+      const iconUrl = browser.runtime.getURL("/icon/gen-alt-text.svg"); 
+      button.innerHTML = `<img src="${iconUrl}" alt="Generate Alt Text Icon" width="20" height="20" style="display: block;">`;
+      // --- END: Use img tag for icon ---
       Object.assign(button.style, {
           marginLeft: '8px', padding: '4px', cursor: 'pointer', border: '1px solid #ccc',
           borderRadius: '4px', backgroundColor: '#f0f0f0', display: 'flex', alignItems: 'center',
@@ -425,8 +592,12 @@ export default defineContentScript({
       button.style.setProperty('z-index', '9999', 'important');
       button.style.setProperty('position', 'relative', 'important');
 
-      const originalButtonContent = button.innerHTML;
+      // --- START: Update originalButtonContent ---
+      const originalButtonContent = button.innerHTML; // Update this *after* setting the innerHTML
+      // --- END: Update originalButtonContent ---
 
+      // --- START: Remove Auto Toggle ---
+      /*
       const autoToggle = document.createElement('label');
       autoToggle.className = 'gemini-auto-toggle';
       autoToggle.title = 'Auto-generate alt text when media is added';
@@ -453,19 +624,30 @@ export default defineContentScript({
 
       autoToggle.appendChild(checkbox);
       autoToggle.appendChild(document.createTextNode('Auto'));
+      */
+      // --- END: Remove Auto Toggle ---
+      
       buttonContainer.appendChild(button);
-      buttonContainer.appendChild(autoToggle);
+      // --- START: Remove Auto Toggle Append ---
+      // buttonContainer.appendChild(autoToggle);
+      // --- END: Remove Auto Toggle Append ---
 
       const generateAltText = async () => {
         button.innerHTML = '';
         button.textContent = 'Finding Media...';
+        button.style.color = '#000000'; // Set text color for status
         button.disabled = true;
 
         // --- IMPORTANT: Use the mediaSearchContainer determined earlier for the search --- 
         if (!mediaSearchContainer) { // Should not happen due to checks above, but safety first
             console.error('[generateAltText] mediaSearchContainer is null! Cannot search for media.');
             button.textContent = 'Error: Internal';
-            setTimeout(() => { button.innerHTML = originalButtonContent; button.disabled = false; }, 3000);
+            button.style.color = '#000000'; // Set text color for status
+            setTimeout(() => { 
+                button.innerHTML = originalButtonContent; 
+                button.style.color = ''; // Clear text color
+                button.disabled = false; 
+            }, 3000);
             return;
         }
         console.log('[generateAltText] Searching for media within determined media search container:', mediaSearchContainer);
@@ -477,18 +659,29 @@ export default defineContentScript({
         if (!mediaElement || !(mediaElement instanceof HTMLImageElement || mediaElement instanceof HTMLVideoElement)) {
             console.error('[generateAltText] Could not find valid media element.');
             button.textContent = 'Error: No Media';
-            setTimeout(() => { button.innerHTML = originalButtonContent; button.disabled = false; }, 2000);
+            button.style.color = '#000000'; // Set text color for status
+            setTimeout(() => { 
+                button.innerHTML = originalButtonContent; 
+                button.style.color = ''; // Clear text color
+                button.disabled = false; 
+            }, 2000);
             return;
         }
 
         // --- START: Use helper to get Data URL ---
         button.textContent = 'Processing Media...';
+        button.style.color = '#000000'; // Set text color for status
         const dataUrl = await getMediaAsDataUrl(mediaElement);
 
         if (!dataUrl) {
              console.error('[generateAltText] Failed to get media as Data URL.');
              button.textContent = 'Error: Process Fail';
-             setTimeout(() => { button.innerHTML = originalButtonContent; button.disabled = false; }, 3000);
+             button.style.color = '#000000'; // Set text color for status
+             setTimeout(() => { 
+                button.innerHTML = originalButtonContent; 
+                button.style.color = ''; // Clear text color
+                button.disabled = false; 
+             }, 3000);
              return;
         }
         // --- END: Use helper to get Data URL ---
@@ -500,10 +693,12 @@ export default defineContentScript({
         try {
             console.log('[generateAltText] Connecting to background...');
             button.textContent = 'Connecting...'; // Reset status before connect
+            button.style.color = '#000000'; // Set text color for status
             // Use browser.runtime.connect
             const port = browser.runtime.connect({ name: "altTextGenerator" });
             console.log('[generateAltText] Connection established.');
             button.textContent = 'Generating...';
+            button.style.color = '#000000'; // Set text color for status
 
             port.onMessage.addListener((response: any) => {
               console.log('[generateAltText] Msg from background:', response);
@@ -514,7 +709,11 @@ export default defineContentScript({
                 textarea.value = response.altText;
                 textarea.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
                 statusText = '✓ Done';
-                if (config.showToasts) createToast('Alt text generated! Please review.', 'success');
+                if (config.showToasts) createToast(
+                  'Alt text generated! 🤖 Double-check it before posting, AI can make mistakes.',
+                  'success', 
+                  8000 // Increased duration to 8 seconds
+                ); 
               } else if (response.error) {
                 const errorMsg = typeof response.error === 'string' ? response.error : 'Unknown error';
                 statusText = `Error: ${errorMsg.substring(0, 20)}...`;
@@ -527,8 +726,10 @@ export default defineContentScript({
               }
               
               button.textContent = statusText;
+              button.style.color = '#000000'; // Set text color for status
               setTimeout(() => {
                   button.innerHTML = originalButtonContent;
+                  button.style.color = ''; // Clear text color
                   button.disabled = false;
               }, isError ? 3000 : 1500);
               
@@ -542,7 +743,12 @@ export default defineContentScript({
               const currentText = button.textContent;
               if (currentText && !currentText.includes('Done') && !currentText.includes('Error')) {
                 button.textContent = 'Disconnect Err';
-                setTimeout(() => { button.innerHTML = originalButtonContent; button.disabled = false; }, 3000);
+                button.style.color = '#000000'; // Set text color for status
+                setTimeout(() => { 
+                    button.innerHTML = originalButtonContent; 
+                    button.style.color = ''; // Clear text color
+                    button.disabled = false; 
+                }, 3000);
               }
             });
 
@@ -554,7 +760,12 @@ export default defineContentScript({
           } catch (error: unknown) {
             console.error('[generateAltText] Connect/Post error:', error);
             button.textContent = 'Connect Error';
-            setTimeout(() => { button.innerHTML = originalButtonContent; button.disabled = false; }, 2000);
+            button.style.color = '#000000'; // Set text color for status
+            setTimeout(() => { 
+                button.innerHTML = originalButtonContent; 
+                button.style.color = ''; // Clear text color
+                button.disabled = false; 
+            }, 2000);
           }
       };
 
@@ -617,152 +828,79 @@ export default defineContentScript({
       return null;
     }
     
-    // Watch for media uploads to trigger auto-generation
-    const observeMediaElements = () => {
-      const mediaObserver = new MutationObserver(mutations => {
-        if (!config.autoMode) return; // Only process if auto mode is on
-        
+    // --- START: Refactor Manual Mode Observer ---
+    let manualModeObserver: MutationObserver | null = null;
+    const observeAltTextAreas = () => {
+      if (manualModeObserver) manualModeObserver.disconnect(); // Disconnect previous
+      console.log('[observeAltTextAreas] Starting observer for manual button injection.');
+      
+      // Initial check for existing textareas
+      document.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR).forEach(addGenerateButton);
+
+      manualModeObserver = new MutationObserver((mutations) => {
+        if (config.autoMode) return; // Stop if switched to auto mode
+
         for (const mutation of mutations) {
           if (mutation.type === 'childList') {
             mutation.addedNodes.forEach(node => {
-              if (node instanceof HTMLElement) { // Check if node is HTMLElement
-                const checkElement = (element: HTMLElement) => {
-                   if ((element.tagName === 'IMG' || element.tagName === 'VIDEO') && !element.getAttribute('alt')?.includes('avatar')) {
-                      console.log('Auto-gen: Media element detected:', element);
-                      const container = findComposerContainer(element);
-                      if (container) {
-                          setTimeout(() => {
-                              const textarea = container.querySelector<HTMLTextAreaElement>(ALT_TEXT_SELECTOR);
-                              if (textarea) {
-                                  addGenerateButton(textarea); // Ensure button exists
-                                  const button = container.querySelector<HTMLButtonElement>(`#${BUTTON_ID}`);
-                                  if (button && !button.disabled) {
-                                      console.log('Auto-generating alt text for:', element);
-                                      button.click();
-                                  }
-                              } else {
-                                  console.log('Auto-gen: No alt text field found yet for media:', element);
-                                  // Optional: could add a temporary observer here if needed
-                              }
-                          }, 500); // Delay to allow alt text field to render
-                      }
-                   }
-                };
-                
-                // Check the added node itself
-                checkElement(node);
-                // Check children if the added node is a container
-                node.querySelectorAll<HTMLElement>('img, video').forEach(checkElement);
+              if (node instanceof HTMLElement) {
+                // Check if the added node itself is a textarea
+                if (node.matches(ALT_TEXT_SELECTOR)) {
+                   addGenerateButton(node as HTMLTextAreaElement);
+                }
+                // Check if the added node contains textareas
+                node.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR)
+                  .forEach(addGenerateButton);
               }
             });
           }
+          // Also observe attribute changes that might make a textarea match (less common)
+          if (mutation.type === 'attributes' && mutation.target instanceof HTMLElement && mutation.target.matches(ALT_TEXT_SELECTOR)) {
+             addGenerateButton(mutation.target as HTMLTextAreaElement);
+          }
         }
       });
-      mediaObserver.observe(document.body, { childList: true, subtree: true });
-      console.log('Media observer started for auto-generation.');
+
+      manualModeObserver.observe(document.body, { 
+          childList: true, 
+          subtree: true, 
+          attributes: true, 
+          attributeFilter: ['aria-label', 'placeholder', 'data-testid', 'role'] // Attributes used in ALT_TEXT_SELECTOR
+      });
+      console.log('[observeAltTextAreas] Observer attached to document body.');
     };
+    // --- END: Refactor Manual Mode Observer ---
     
-    // Process existing textareas on load
-    document.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR).forEach(addGenerateButton);
-    
-    // Watch for dynamically added textareas
-    const mainObserver = new MutationObserver(mutations => {
-      console.log('Main observer triggered.');
-      for (const mutation of mutations) {
-        if (mutation.type === 'childList') {
-          mutation.addedNodes.forEach(node => {
-            if (node instanceof Element) { // Check node type
-              if (node.matches(ALT_TEXT_SELECTOR)) {
-                addGenerateButton(node as HTMLTextAreaElement);
-              } 
-              node.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR).forEach(addGenerateButton);
+    // --- START: Main Observer Dispatcher ---
+    const observeDOMChanges = () => {
+        console.log('[observeDOMChanges] Evaluating mode. Auto Mode is currently:', config.autoMode);
+        if (config.autoMode) {
+            // Start Auto Mode Observer, Stop Manual Mode Observer
+            if (manualModeObserver) {
+                console.log('[observeDOMChanges] Disconnecting manualModeObserver.');
+                manualModeObserver.disconnect();
             }
-          });
+            observeMediaForAutoMode();
+        } else {
+            // Start Manual Mode Observer, Stop Auto Mode Observer
+            if (autoModeMediaObserver) {
+                console.log('[observeDOMChanges] Disconnecting autoModeMediaObserver.');
+                autoModeMediaObserver.disconnect();
+            }
+            observeAltTextAreas();
         }
-      }
+    };
+    // --- END: Main Observer Dispatcher ---
+    
+    // Initial DOM Observation Start (moved after config load and observer definitions)
+    // loadConfig already calls observeDOMChanges implicitly via the listener on first load,
+    // but explicit call ensures it runs even if storage is empty/no change event fires initially.
+    // We need to wait for config to be loaded first.
+    loadConfig().then(() => {
+        console.log('[Initial Setup] Config loaded, initiating observeDOMChanges.');
+        observeDOMChanges();
     });
     
-    mainObserver.observe(document.body, { childList: true, subtree: true });
-    observeMediaElements();
-
-    // Attach listeners for drag/drop and file input events
-    const attachMediaListeners = (composerElement: Element) => {
-        console.log('[attachMediaListeners] Attaching to:', composerElement);
-        
-        const fileInput = composerElement.querySelector<HTMLInputElement>(FILE_INPUT_SELECTOR);
-        const dropZone = composerElement.closest<HTMLElement>(DROP_ZONE_SELECTOR) || (composerElement instanceof HTMLElement ? composerElement : null);
-
-        const fileInputEl = fileInput as HTMLElement | null;
-        if (fileInputEl && !fileInputEl.dataset.mediaListenerAttached) {
-            fileInputEl.addEventListener('change', (event: Event) => {
-                if (event.target instanceof HTMLInputElement) {
-                    console.log('[attachMediaListeners] File input CHANGED');
-                    handleFiles(event.target.files);
-                }
-            });
-            fileInputEl.dataset.mediaListenerAttached = 'true';
-            console.log('[attachMediaListeners] Change listener attached to file input.');
-        } else if (fileInputEl) {
-             console.log('[attachMediaListeners] Change listener already attached to file input.');
-        } else {
-             console.warn('[attachMediaListeners] Could not find file input using selector:', FILE_INPUT_SELECTOR, 'within:', composerElement);
-        }
-
-        const dropZoneEl = dropZone as HTMLElement | null;
-        if (dropZoneEl && !dropZoneEl.dataset.dropListenerAttached) {
-            dropZoneEl.addEventListener('dragover', (event: DragEvent) => {
-                event.preventDefault(); event.stopPropagation();
-            });
-            dropZoneEl.addEventListener('drop', (event: DragEvent) => {
-                event.preventDefault(); event.stopPropagation();
-                console.log('[attachMediaListeners] DROP event detected');
-                if (event.dataTransfer?.files) {
-                    handleFiles(event.dataTransfer.files);
-                }
-            });
-            dropZoneEl.dataset.dropListenerAttached = 'true';
-            console.log('[attachMediaListeners] Drop/Dragover listeners attached to drop zone:', dropZoneEl);
-        } else if (dropZoneEl) {
-             console.log('[attachMediaListeners] Drop/Dragover listeners already attached.');
-        } else {
-             console.warn('[attachMediaListeners] Could not find drop zone using selector:', DROP_ZONE_SELECTOR);
-        }
-    };
-
-    // Observe for composer elements appearing to attach listeners
-    const observeForComposer = () => {
-        console.log('Setting up observer for composer elements...');
-        const composerObserver = new MutationObserver((mutationsList) => { 
-            for (const mutation of mutationsList) {
-                if (mutation.type === 'childList') {
-                    mutation.addedNodes.forEach(node => {
-                        if (node instanceof Element) {
-                            if (node.matches(COMPOSER_SELECTOR)) {
-                                console.log('Composer added directly:', node);
-                                attachMediaListeners(node);
-                            }
-                            node.querySelectorAll<Element>(COMPOSER_SELECTOR).forEach(composer => {
-                                console.log('Composer found via querySelectorAll:', composer);
-                                attachMediaListeners(composer);
-                            });
-                        }
-                    });
-                }
-            }
-        });
-        composerObserver.observe(document.body, { childList: true, subtree: true });
-        console.log('Composer observer started.');
-        
-        // Check existing on load
-        document.querySelectorAll<Element>(COMPOSER_SELECTOR).forEach(attachMediaListeners);
-    };
-
-    // --- START: Call the observer setup ---
-    if (document.readyState === 'complete' || document.readyState === 'interactive') {
-       observeForComposer();
-    } else {
-       document.addEventListener('DOMContentLoaded', observeForComposer);
-    }
-    // --- END: Call the observer setup ---
+    console.log('Bluesky Alt Text Generator content script setup complete.');
   }
 });
