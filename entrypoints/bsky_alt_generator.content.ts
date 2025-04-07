@@ -369,6 +369,9 @@ export default defineContentScript({
         generateAltText();
       });
 
+      // Add the button to its container
+      buttonContainer.appendChild(button);
+
       // --- START: Modify Button Insertion Again ---
       // Insert the container within the parent, but specifically after the textarea
       buttonAttachPoint.insertBefore(buttonContainer, textarea.nextSibling);
