@@ -171,31 +171,67 @@ export default defineContentScript({
     };
     
     // Function to find media elements in the composer (Add types)
+    // Simplified based on reliable container finding
     const findMediaElement = (container: Element): HTMLImageElement | HTMLVideoElement | null => {
-      console.log('Searching for media in container:', container);
+      console.log('[findMediaElement - Simplified] Searching for media in container:', container);
 
       const isElementVisible = (el: Element | null): el is HTMLElement => {
           if (!el) return false;
           const rect = el.getBoundingClientRect();
-          return rect.width > 10 && rect.height > 10 && (el as HTMLElement).offsetParent !== null;
+          // Relaxed visibility check slightly, primary check is the selector
+          return rect.width > 0 && rect.height > 0 && (el as HTMLElement).offsetParent !== null;
       };
       
+      // --- START: Use simplified, direct selectors within the known container --- 
+      // Focus on common preview patterns and basic img/video tags
       const selectors: string[] = [
+        // Common test IDs for image/video previews
+        '[data-testid="imagePreview"] img[src]', 
+        '[data-testid="images"] img[src]',
+        '[data-testid="videoPreview"] video[src]', 
+        '[data-testid="videos"] video[src]',
+        '[data-testid="videoPreview"] video source[src]', // Include source tag for video
+        '[data-testid="videos"] video source[src]',
+        // General img/video tags within the container (as a fallback)
+        'img[src]:not([alt*="avatar" i]):not([src*="avatar"])', // Basic image, avoid avatars
+        'video[src]', // Basic video
+        'video source[src]' // Basic video source
+        /* Removed specific src checks (data:, blob:) - check all src now
         '[data-testid="imagePreview"] img[src^="data:image/"]', '[data-testid="images"] img[src^="data:image/"]', // Specific Data URL
         '[data-testid="imagePreview"] img[src^="blob:"]', '[data-testid="images"] img[src^="blob:"]', // Specific Blob URL
         'img[src^="data:image/"]', // Any Data URL
         'img[src^="blob:"]' // Any Blob URL
+        */
       ];
 
       for (const selector of selectors) {
-          const img = container.querySelector<HTMLImageElement>(selector);
-          if (isElementVisible(img)) {
-              console.log(`Found image via selector: ${selector}`, img);
-              return img;
-          } else if (img) {
-              console.warn(`Image found but hidden/too small with selector: ${selector}`, img);
+          const element = container.querySelector<HTMLImageElement | HTMLVideoElement | HTMLSourceElement>(selector);
+          
+          // Handle finding the <source> tag within a <video>
+          if (element instanceof HTMLSourceElement) {
+              const videoParent = element.closest('video');
+              if (videoParent && isElementVisible(videoParent)) {
+                  console.log(`[findMediaElement - Simplified] Found video via source selector: ${selector}`, videoParent);
+                  return videoParent;
+              } else {
+                  console.warn(`[findMediaElement - Simplified] Found source tag but parent video hidden/invalid: ${selector}`, element);
+              }
+              continue; // Move to next selector if source's video isn't valid
+          }
+          
+          // Handle finding <img> or <video> directly
+          if (element && isElementVisible(element)) {
+              console.log(`[findMediaElement - Simplified] Found media via direct selector: ${selector}`, element);
+              return element; // Return the first visible match
+          } else if (element) {
+              console.warn(`[findMediaElement - Simplified] Media found but hidden/too small with selector: ${selector}`, element);
           }
       }
+      // --- END: Use simplified, direct selectors --- 
+
+      // --- START: Remove scoring logic --- 
+      console.error('[findMediaElement - Simplified] FAILED: No suitable media found using direct selectors.');
+      /*
       console.log('No valid data/blob URL image found via direct selectors, proceeding to scoring logic...');
 
       const candidates = Array.from(container.querySelectorAll<HTMLImageElement | HTMLVideoElement>('img, video'));
@@ -263,6 +299,9 @@ export default defineContentScript({
          console.error('SCORING FAILED: No suitable media candidate found via scoring logic.');
       }
       return bestCandidate;
+      */
+      // --- END: Remove scoring logic --- 
+      return null; // Return null if no media found via direct selectors
     };
     
     // --- START: New Helper to get Data URL ---
@@ -513,22 +552,33 @@ export default defineContentScript({
     // Helper function to find the composer container
     function findComposerContainer(element: Element): Element | null {
       console.log('[findComposerContainer] Searching from:', element);
-      const selectors = [
-          '[role="dialog"][aria-modal="true"]',
-          '[data-testid="composer"]'
+      // --- START: Use specific, reliable selectors provided by user ---
+      const specificSelectors = [
+          '[data-testid="composePostView"]', // Container when composing a post
+          '[aria-label="Add alt text"]'      // Container when adding alt text (likely a dialog/modal)
       ];
+      // --- END: Use specific, reliable selectors ---
+      
+      // Remove validationSelectors and fallback logic as these are deemed reliable
+      /*
       const validationSelectors = [
           '[data-testid="imagePreview"]', '[data-testid="images"]',
           'button[aria-label*="Post"]', 'button[type="submit"]'
       ];
+      */
       
-      for (const selector of selectors) {
+      for (const selector of specificSelectors) {
           const container = element.closest<Element>(selector);
-          if (container && container.contains(element) && validationSelectors.some(vs => container.querySelector(vs))) {
-              console.log('[findComposerContainer] Found valid container via selector:', selector, container);
+          // Simplify the check: If closest finds a container matching the selector, and it contains the starting element, use it.
+          if (container && container.contains(element)) {
+              console.log('[findComposerContainer] Found valid container via specific selector:', selector, container);
               return container;
           }
       }
+      
+      // --- START: Remove fallback logic --- 
+      console.error('[findComposerContainer] Failed to find any container using specific selectors:', specificSelectors.join(', '));
+      /*
       console.log('[findComposerContainer] No primary container found, trying fallback parent check.');
       // Fallback: simple parent check (less reliable)
       const fallback = element.parentElement?.parentElement || element.parentElement;
@@ -537,6 +587,8 @@ export default defineContentScript({
            return fallback;
       }
       console.error('[findComposerContainer] Failed to find any container.');
+      */
+      // --- END: Remove fallback logic ---
       return null;
     }
     
