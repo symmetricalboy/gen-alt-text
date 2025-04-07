@@ -361,25 +361,41 @@ export default defineContentScript({
       if (textarea.dataset.geminiButtonAdded === 'true') return;
       console.log('[addGenerateButton] Starting for textarea:', textarea);
 
-      // --- START: Find the MAIN composer container FIRST and robustly ---
-      const composerContainer = findComposerContainer(textarea);
-      if (!composerContainer) {
-          console.error('[addGenerateButton] Could not find the main composer container using findComposerContainer. Button will not be added or may not function correctly.');
-          // Decide if we should return here or allow adding the button but expect failure
-          // For now, let's prevent adding the button if the main container isn't found.
+      // --- START: Find the container where the TEXTAREA lives --- 
+      const contextContainer = findComposerContainer(textarea);
+      if (!contextContainer) {
+          console.error('[addGenerateButton] Could not find the context container (composePostView, Add alt text, or Video settings) for the textarea. Button not added.');
           return; 
       }
-      console.log('[addGenerateButton] Found composer container:', composerContainer);
-      // --- END: Find the MAIN composer container FIRST ---
+      console.log('[addGenerateButton] Found context container for textarea:', contextContainer);
+      // --- END: Find the container where the TEXTAREA lives ---
 
-      // Check if a button ALREADY exists within this specific composer container
-      if (composerContainer.querySelector(`#${BUTTON_ID}`)) {
-         console.log('[addGenerateButton] Button already exists in this composer container, marking textarea and skipping UI creation.');
+      // --- START: Determine the container where the MEDIA element lives ---
+      let mediaSearchContainer: Element | null = null;
+      if (contextContainer.matches('[aria-label="Video settings"]')) {
+          // If context is video settings, media is in the parent composePostView
+          mediaSearchContainer = contextContainer.closest('[data-testid="composePostView"]');
+          if (!mediaSearchContainer) {
+               console.error('[addGenerateButton] Context is "Video settings", but failed to find parent [data-testid="composePostView"] for media search.');
+               return; // Cannot proceed without media container
+          } 
+          console.log('[addGenerateButton] Context is "Video settings", targeting parent composePostView for media search:', mediaSearchContainer);
+      } else {
+          // If context is composePostView or Add alt text (for images), media is within that context
+          mediaSearchContainer = contextContainer;
+          console.log('[addGenerateButton] Context is composePostView or Add alt text, targeting context container for media search:', mediaSearchContainer);
+      }
+      // --- END: Determine the container where the MEDIA element lives ---
+
+      // Check if a button ALREADY exists within the determined *media search container*
+      // (Button might be associated with the overall composer even if triggered from a modal)
+      if (mediaSearchContainer.querySelector(`#${BUTTON_ID}`)) {
+         console.log('[addGenerateButton] Button already exists in the media search container, marking textarea and skipping UI creation.');
          textarea.dataset.geminiButtonAdded = 'true'; // Still mark the textarea
          return;
       }
       
-      // Find a good place to physically *attach* the button UI (e.g., near the textarea)
+      // Find a good place to physically *attach* the button UI (near the textarea)
       const buttonAttachPoint = textarea.parentElement; // Or adjust as needed for layout
       if (!buttonAttachPoint) {
           console.error('[addGenerateButton] Could not find a suitable attach point (parentElement) for the button UI near the textarea.');
@@ -443,12 +459,18 @@ export default defineContentScript({
         button.textContent = 'Finding Media...';
         button.disabled = true;
 
-        // --- IMPORTANT: Use the composerContainer identified earlier for the search --- 
-        console.log('[generateAltText] Searching for media within confirmed composer container:', composerContainer);
-        const mediaElement = findMediaElement(composerContainer);
+        // --- IMPORTANT: Use the mediaSearchContainer determined earlier for the search --- 
+        if (!mediaSearchContainer) { // Should not happen due to checks above, but safety first
+            console.error('[generateAltText] mediaSearchContainer is null! Cannot search for media.');
+            button.textContent = 'Error: Internal';
+            setTimeout(() => { button.innerHTML = originalButtonContent; button.disabled = false; }, 3000);
+            return;
+        }
+        console.log('[generateAltText] Searching for media within determined media search container:', mediaSearchContainer);
+        const mediaElement = findMediaElement(mediaSearchContainer);
         // --- End search context change ---
         
-        console.log('[generateAltText] Media element found in composer:', mediaElement);
+        console.log('[generateAltText] Media element found in search container:', mediaElement);
 
         if (!mediaElement || !(mediaElement instanceof HTMLImageElement || mediaElement instanceof HTMLVideoElement)) {
             console.error('[generateAltText] Could not find valid media element.');
