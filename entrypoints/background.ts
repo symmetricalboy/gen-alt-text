@@ -219,15 +219,19 @@ By consistently applying these guidelines, you will create alt-text for video th
     console.log(`Port connected: ${port.name}`, port.sender);
 
     if (port.name === "altTextGenerator") {
-      port.onMessage.addListener(async (message: BackgroundMessage) => {
+      port.onMessage.addListener(async (message: any) => { // Use any temporarily or define a specific interface for this message
         console.log('Port message received:', message);
 
-        if (message.type === 'generateAltText' && message.payload) {
-          const payload = message.payload as GenerateAltTextPayload;
-          console.log(`Port request: Generate alt text for ${payload.imageUrl}, isVideo: ${payload.isVideo}`);
+        // --- START: Align with content script message format ---
+        // Check for 'action' key instead of 'type', and access properties directly
+        if (message.action === 'generateAltText' && message.imageUrl && typeof message.isVideo === 'boolean') {
+          // const payload = message.payload as GenerateAltTextPayload; // No longer using payload
+          console.log(`Port request: Generate alt text for ${message.imageUrl}, isVideo: ${message.isVideo}`);
           
           // Use the main generation function, fetching if necessary
-          const result = await generateAltTextForMedia(payload.imageUrl, payload.isVideo);
+          // Pass mimeTypeHint as undefined since we rely on the Data URL
+          const result = await generateAltTextForMedia(message.imageUrl, message.isVideo, undefined);
+        // --- END: Align with content script message format ---
           
           console.log('Sending result back via port:', result);
           try {
@@ -236,7 +240,7 @@ By consistently applying these guidelines, you will create alt-text for video th
             console.error('Error posting message back via port:', postError);
           }
         } else {
-          console.warn('Received unknown message type via port:', message.type);
+          console.warn('Received unknown message format or action via port:', message);
         }
       });
 
