@@ -198,19 +198,20 @@ export default defineContentScript({
           console.log('[addGenerateButton] Context is composePostView or Add alt text, targeting context container for media search:', mediaSearchContainer);
       }
       
-      // Use mediaSearchContainer for button existence check
-      if (mediaSearchContainer.querySelector(`#${BUTTON_ID}`)) {
-         console.log('[addGenerateButton] Button already exists in the media search container, marking textarea and skipping UI creation.');
+      // --- START: Refine button existence check ---
+      // Check if a button ALREADY exists specifically near the textarea's parent
+      const buttonAttachPoint = textarea.parentElement;
+      if (!buttonAttachPoint) {
+          console.error('[addGenerateButton] Could not find textarea parentElement to attach button or check for existing.');
+          return; 
+      }
+      if (buttonAttachPoint.querySelector(`#${BUTTON_ID}`)) {
+         console.log('[addGenerateButton] Button already exists near the textarea attach point, marking textarea and skipping UI creation.');
          textarea.dataset.geminiButtonAdded = 'true'; 
          return;
       }
+      // --- END: Refine button existence check ---
       
-      const buttonAttachPoint = textarea.parentElement;
-      if (!buttonAttachPoint) {
-          console.error('[addGenerateButton] Could not find a suitable attach point (parentElement) for the button UI near the textarea.');
-          return;
-      }
-
       const buttonContainer = document.createElement('div');
       Object.assign(buttonContainer.style, {
           display: 'flex', alignItems: 'center', gap: '8px', 
