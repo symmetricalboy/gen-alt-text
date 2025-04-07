@@ -104,48 +104,55 @@ By consistently applying these guidelines, you will create alt-text for video th
   
   // --- Helper function to extract Base64 data --- 
   // Handles both data URLs and fetching blob/http URLs
+  // !! Now simplified: Assumes input 'source' is ALWAYS a Data URL !!
   async function getBase64Data(source: string, mimeTypeHint?: string): Promise<{ base64Data: string; mimeType: string }> {
+    // Removed fetch logic, expecting only Data URLs now
     if (source.startsWith('data:')) {
       // Already a Data URL
-      console.log('Source is Data URL');
+      console.log('[getBase64Data] Source is Data URL, extracting...');
       const parts = source.match(/^data:(.+?);base64,(.*)$/);
       if (!parts || parts.length < 3) {
-        throw new Error('Invalid Data URL format');
+        console.error('[getBase64Data] Invalid Data URL format received:', source.substring(0, 100) + '...');
+        throw new Error('Invalid Data URL format received from content script');
       }
       const mimeType = parts[1];
       const base64Data = parts[2];
+      console.log('[getBase64Data] Extracted mimeType:', mimeType, 'data length:', base64Data.length);
       return { base64Data, mimeType };
     } else {
-      // Assume it's a URL (blob:, https:, etc.) that needs fetching
-      console.log('Source is URL, fetching:', source);
-      const fetchResponse = await fetch(source);
-      if (!fetchResponse.ok) {
-        throw new Error(`Failed to fetch media URL: ${fetchResponse.statusText}`);
-      }
-      const blob = await fetchResponse.blob();
-      const mimeType = mimeTypeHint || blob.type || 'application/octet-stream'; // Use hint or blob type
-      console.log('Fetched blob, type:', mimeType);
-      
-      // Convert blob to base64
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          if (typeof reader.result === 'string') {
-            const base64WithPrefix = reader.result;
-            const base64Data = base64WithPrefix.split(',')[1]; // Remove data:*/*;base64,
-            if (base64Data) {
-              console.log('Blob converted to base64');
-              resolve({ base64Data, mimeType });
-            } else {
-              reject(new Error('Failed to extract base64 data from blob reader result.'));
-            }
-          } else {
-            reject(new Error('Blob reader result was not a string.'));
-          }
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
+      // This case should ideally not happen anymore
+      console.error('[getBase64Data] ERROR: Received non-Data URL source despite changes:', source.substring(0, 100) + '...');
+      throw new Error('Background script received a non-Data URL source unexpectedly.');
+      // // Assume it's a URL (blob:, https:, etc.) that needs fetching
+      // console.log('Source is URL, fetching:', source);
+      // const fetchResponse = await fetch(source);
+      // if (!fetchResponse.ok) {
+      //   throw new Error(`Failed to fetch media URL: ${fetchResponse.statusText}`);
+      // }
+      // const blob = await fetchResponse.blob();
+      // const mimeType = mimeTypeHint || blob.type || 'application/octet-stream'; // Use hint or blob type
+      // console.log('Fetched blob, type:', mimeType);
+      // 
+      // // Convert blob to base64
+      // return new Promise((resolve, reject) => {
+      //   const reader = new FileReader();
+      //   reader.onloadend = () => {
+      //     if (typeof reader.result === 'string') {
+      //       const base64WithPrefix = reader.result;
+      //       const base64Data = base64WithPrefix.split(',')[1]; // Remove data:*/*;base64,
+      //       if (base64Data) {
+      //         console.log('Blob converted to base64');
+      //         resolve({ base64Data, mimeType });
+      //       } else {
+      //         reject(new Error('Failed to extract base64 data from blob reader result.'));
+      //       }
+      //     } else {
+      //       reject(new Error('Blob reader result was not a string.'));
+      //     }
+      //   };
+      //   reader.onerror = reject;
+      //   reader.readAsDataURL(blob);
+      // });
     }
   }
   

@@ -265,6 +265,58 @@ export default defineContentScript({
       return bestCandidate;
     };
     
+    // --- START: New Helper to get Data URL ---
+    // Fetches blob/http URLs and converts to a base64 Data URL within the content script context
+    async function getMediaAsDataUrl(element: HTMLImageElement | HTMLVideoElement): Promise<string | null> {
+      if (!element || !element.src) {
+        console.warn('[getMediaAsDataUrl] Invalid element or src');
+        return null;
+      }
+      const sourceUrl = element.src;
+
+      if (sourceUrl.startsWith('data:')) {
+        console.log('[getMediaAsDataUrl] Source is already Data URL');
+        return sourceUrl; // Already a data URL
+      }
+
+      if (sourceUrl.startsWith('blob:') || sourceUrl.startsWith('http')) {
+        console.log('[getMediaAsDataUrl] Fetching source URL:', sourceUrl);
+        try {
+          const fetchResponse = await fetch(sourceUrl);
+          if (!fetchResponse.ok) {
+            throw new Error(`Failed to fetch media URL: ${fetchResponse.statusText} (${fetchResponse.status})`);
+          }
+          const blob = await fetchResponse.blob();
+          console.log('[getMediaAsDataUrl] Fetched blob, type:', blob.type);
+
+          // Convert blob to base64 Data URL
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              if (typeof reader.result === 'string') {
+                console.log('[getMediaAsDataUrl] Blob converted to base64 Data URL');
+                resolve(reader.result);
+              } else {
+                reject(new Error('Blob reader result was not a string.'));
+              }
+            };
+            reader.onerror = (error) => {
+               console.error('[getMediaAsDataUrl] FileReader error:', error);
+               reject(new Error('FileReader error reading blob.'));
+            };
+            reader.readAsDataURL(blob);
+          });
+        } catch (error) {
+          console.error('[getMediaAsDataUrl] Error fetching or converting URL:', error);
+          return null; // Return null on fetch/conversion error
+        }
+      } else {
+         console.warn('[getMediaAsDataUrl] Unhandled URL scheme:', sourceUrl);
+         return null; // Unhandled scheme
+      }
+    }
+    // --- END: New Helper to get Data URL ---
+
     // Add the button to an alt text textarea (Add types)
     function addGenerateButton(textarea: HTMLTextAreaElement) {
       if (textarea.dataset.geminiButtonAdded === 'true') return;
@@ -335,25 +387,38 @@ export default defineContentScript({
 
       const generateAltText = async () => {
         button.innerHTML = '';
-        button.textContent = 'Connecting...';
+        button.textContent = 'Finding Media...'; // Updated initial status
         button.disabled = true;
 
         const mediaElement = findMediaElement(validContainer);
-        console.log('[generateAltText] Media element:', mediaElement);
+        console.log('[generateAltText] Media element found:', mediaElement);
 
-        if (!mediaElement || !(mediaElement instanceof HTMLImageElement || mediaElement instanceof HTMLVideoElement) || !mediaElement.src) {
-            console.error('[generateAltText] Could not find valid media element or its src.');
+        if (!mediaElement || !(mediaElement instanceof HTMLImageElement || mediaElement instanceof HTMLVideoElement)) {
+            console.error('[generateAltText] Could not find valid media element.');
             button.textContent = 'Error: No Media';
             setTimeout(() => { button.innerHTML = originalButtonContent; button.disabled = false; }, 2000);
             return;
-          }
+        }
 
-          const mediaUrl = mediaElement.src;
-          const isVideo = mediaElement.tagName === 'VIDEO'; // Already checked instanceof
-          console.log(`[generateAltText] ${isVideo ? 'Video' : 'Image'} URL:`, mediaUrl);
+        // --- START: Use helper to get Data URL ---
+        button.textContent = 'Processing Media...';
+        const dataUrl = await getMediaAsDataUrl(mediaElement);
 
-          try {
+        if (!dataUrl) {
+             console.error('[generateAltText] Failed to get media as Data URL.');
+             button.textContent = 'Error: Process Fail';
+             setTimeout(() => { button.innerHTML = originalButtonContent; button.disabled = false; }, 3000);
+             return;
+        }
+        // --- END: Use helper to get Data URL ---
+
+        // const mediaUrl = mediaElement.src; // No longer needed directly
+        const isVideo = mediaElement.tagName === 'VIDEO';
+        console.log(`[generateAltText] Got ${isVideo ? 'Video' : 'Image'} as Data URL (length: ${dataUrl.length})`);
+
+        try {
             console.log('[generateAltText] Connecting to background...');
+            button.textContent = 'Connecting...'; // Reset status before connect
             // Use browser.runtime.connect
             const port = browser.runtime.connect({ name: "altTextGenerator" });
             console.log('[generateAltText] Connection established.');
@@ -401,7 +466,8 @@ export default defineContentScript({
             });
 
             console.log('[generateAltText] Sending message...');
-            port.postMessage({ action: 'generateAltText', imageUrl: mediaUrl, isVideo: isVideo });
+            // Send the dataUrl obtained from the helper
+            port.postMessage({ action: 'generateAltText', imageUrl: dataUrl, isVideo: isVideo });
             console.log('[generateAltText] Message sent.');
 
           } catch (error: unknown) {
