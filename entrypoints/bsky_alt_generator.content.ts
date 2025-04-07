@@ -555,7 +555,8 @@ export default defineContentScript({
       // --- START: Use specific, reliable selectors provided by user ---
       const specificSelectors = [
           '[data-testid="composePostView"]', // Container when composing a post
-          '[aria-label="Add alt text"]'      // Container when adding alt text (likely a dialog/modal)
+          '[aria-label="Add alt text"]',      // Container when adding image alt text (likely a dialog/modal)
+          '[aria-label="Video settings"]'     // Container when adding video alt text
       ];
       // --- END: Use specific, reliable selectors ---
       
