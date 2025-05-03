@@ -1,6 +1,6 @@
 # Bluesky Alt Text Generator (Chrome/Firefox Extension)
 
-![Extension Icon](./public/icon/gen-alt-text.svg)
+![Extension Icon](./public/icons/gen-alt-text.svg)
 
 This browser extension helps you generate detailed, accessible alt text for images and videos you add to posts on Bluesky, using Google Gemini AI.
 
