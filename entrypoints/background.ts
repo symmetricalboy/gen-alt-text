@@ -18,250 +18,193 @@ interface BackgroundMessage {
 }
 
 export default defineBackground(() => {
-  console.log('Bluesky Alt Text Generator background script loaded');
+  console.log('Bluesky Alt Text Generator background script loaded (Proxy Mode)');
   
-  // Check API key early
-  const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!GEMINI_API_KEY) {
-    console.error('VITE_GEMINI_API_KEY not found - please add it to .env file');
+  // Get Cloud Function URL from environment variables (set via wxt.config.ts)
+  const CLOUD_FUNCTION_URL = import.meta.env.VITE_CLOUD_FUNCTION_URL;
+
+  if (!CLOUD_FUNCTION_URL || CLOUD_FUNCTION_URL === 'YOUR_FUNCTION_URL_HERE') {
+    console.error(
+      'VITE_CLOUD_FUNCTION_URL is not configured or is set to the placeholder value. ' +
+      'Please deploy the Cloud Function and update the URL in wxt.config.ts then rebuild the extension.'
+    );
+    // Consider preventing listeners from attaching if URL is missing
   }
   
-  // Store the custom instructions
-  const systemInstructions = `You will be provided with visual media (either a still image or a video file). Your task is to generate alternative text (alt-text) that describes the media\'s content and context. This alt-text is intended for use with screen reader technology, assisting individuals who are blind or visually impaired to understand the visual information. Adhere to the following guidelines strictly:
-
-1.  **Media Type Identification:**
-    *   Begin by identifying the type of media. For images, note if it is a "photograph", "painting", "illustration", "diagram", "screenshot", "comic panel", etc. For videos, start the description with "Video describing...".
-
-2.  **Content and Purpose:**
-    *   Describe the visual content accurately and thoroughly. Explain the media in the context that it is presented.
-    *   Convey the media\'s purpose. Why is this included? What information is it trying to present? What is the core message?
-    *   Prioritize the most important information, placing it at the beginning of the alt-text.
-    *   If the image serves a specific function (e.g., a button or a link), describe the function. Example: "Search button" or "Link to the homepage".
-
-3.  **Video-Specific Instructions:**
-    *   For videos, describe the key visual elements, actions, scenes, and any text overlays that appear throughout the *duration* of the video playback. Focus on conveying the narrative or informational flow presented visually. Do *not* just describe a single frame or thumbnail.
-
-4.  **Sequential Art (Comics/Webcomics):**
-    *   For media containing sequential art like comic panels or webcomics, describe the narrative progression. Detail the actions, characters, settings, and dialogue/captions within each panel or across the sequence to tell the story visually represented.
-
-5.  **Text within the Media:**
-    *   If the media contains text (e.g., signs, labels, captions, text overlays in videos), transcribe the text *verbatim* within the alt-text. Indicate that this is a direct quote by using quotation marks. Example: \'A sign that reads, "Proceed with Caution".\'
-    *   **Crucially**, if the media consists primarily of a large block of text (e.g., a screenshot of an article, a quote graphic, a presentation slide), you MUST transcribe the *entire* text content verbatim, up to a practical limit (e.g., 2000 characters). Accuracy and completeness of the text take precedence over brevity in these cases.
-    *   For screenshots containing User Interface (UI) elements, transcribe essential text (button labels, input field values, key menu items). Exercise judgment to omit minor or redundant UI text (tooltips, decorative labels) that doesn\'t significantly contribute to understanding the core function or state shown. Example: "Screenshot of a software settings window. The \'Notifications\' tab is active, showing a checkbox labeled \\"Enable desktop alerts\\" which is checked."
-
-6.  **Brevity and Clarity:**
-    *   Keep descriptions concise *except* when transcribing significant amounts of text or describing sequential narratives (comics, videos), where clarity and completeness are more important. Aim for under 125 characters for simple images where possible.
-    *   Use clear, simple language. Avoid jargon unless it\'s part of transcribed text or essential to the meaning.
-    *   Use proper grammar, punctuation, and capitalization. End sentences with a period.
-
-7.  **Notable Individuals:**
-    *   If the media features recognizable people, identify them by name. If their role or title is relevant, include that too. Example: "Photograph of Dr. Jane Goodall observing chimpanzees."
-
-8.  **Inappropriate or Sensitive Content:**
-    *   If the media depicts potentially sensitive, offensive, or harmful content, maintain a professional, objective, and clinical tone.
-    *   Describe the factual visual content accurately but avoid graphic or sensationalized language. Aim for a descriptive level appropriate for a general audience (e.g., PG-13).
-
-9.  **Output Format:**
-    *   Provide *only* the descriptive alt-text. Do *not* include any introductory phrases (e.g., "The image shows...", "Alt-text:"), conversational filler, or follow-up statements. Output *just* the description.
-
-10. **Decorative Media:**
-    *   If an image is purely decorative and adds no informational value (e.g., a background pattern), provide empty alt-text (\`alt=""\`). Be certain it provides no value before doing so. Videos are generally not decorative.
-
-11. **Do Not\'s:**
-    * Do not begin descriptions with generic phrases like "Image of...", "Video of...", etc., unless specifying the type as in Guideline 1.
-    * Do not add external information, interpretations, or assumptions not directly represented in the visual media itself.
-    * Do not repeat information already present in surrounding text content on the page.
-
-By consistently applying these guidelines, you will create alt-text that is informative, accurate, concise where appropriate, and genuinely helpful for users of assistive technology across different types of visual media.`;
+  // Interface for responses sent back via Port - ADD THIS
+  type PortResponse = { altText: string } | { error: string };
   
-  // --- Helper function to extract Base64 data --- 
-  // Handles both data URLs and fetching blob/http URLs
-  // !! Now simplified: Assumes input 'source' is ALWAYS a Data URL !!
-  async function getBase64Data(source: string, mimeTypeHint?: string): Promise<{ base64Data: string; mimeType: string }> {
-    // Removed fetch logic, expecting only Data URLs now
-    if (source.startsWith('data:')) {
-      // Already a Data URL
-      console.log('[getBase64Data] Source is Data URL, extracting...');
-      const parts = source.match(/^data:(.+?);base64,(.*)$/);
-      if (!parts || parts.length < 3) {
-        console.error('[getBase64Data] Invalid Data URL format received:', source.substring(0, 100) + '...');
-        throw new Error('Invalid Data URL format received from content script');
+  // 1. Add helper to convert Blob or URL to Data URL
+  const blobToDataURL = (blob: Blob): Promise<string> => {
+      return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+      });
+  };
+
+  // 2. Update getBase64Data to handle different source types (Data URL, HTTP URL)
+  async function getBase64Data(source: string): Promise<{ base64Data: string; mimeType: string }> {
+      if (source.startsWith('data:')) {
+          console.log('[getBase64Data] Source is Data URL, extracting...');
+          const parts = source.match(/^data:(.+?);base64,(.*)$/);
+          if (!parts || parts.length < 3) {
+              console.error('[getBase64Data] Invalid Data URL format received:', source.substring(0, 100) + '...');
+              throw new Error('Invalid Data URL format received');
+          }
+          const mimeType = parts[1];
+          const base64Data = parts[2];
+          if (!mimeType.includes('/') || !base64Data) {
+              throw new Error('Extracted mimeType or base64 data appears invalid.');
+          }
+          return { base64Data, mimeType };
+      } else if (source.startsWith('http:') || source.startsWith('https:')) {
+          console.log('[getBase64Data] Source is HTTP(S) URL, fetching...', source);
+          try {
+              const response = await fetch(source);
+              if (!response.ok) {
+                  throw new Error(`Failed to fetch URL: ${response.status} ${response.statusText}`);
+              }
+              const blob = await response.blob();
+              const dataUrl = await blobToDataURL(blob);
+              console.log('[getBase64Data] Successfully fetched and converted URL to Data URL.');
+              // Re-run with the dataUrl to extract parts
+              return await getBase64Data(dataUrl);
+          } catch (fetchError) {
+              console.error('[getBase64Data] Error fetching or converting URL:', fetchError);
+              throw new Error(`Failed to fetch or process media URL: ${fetchError instanceof Error ? fetchError.message : fetchError}`);
+          }
+      } else {
+          console.error('[getBase64Data] ERROR: Received unsupported source type:', source.substring(0, 100) + '...');
+          throw new Error('Background script received an unsupported source type.');
       }
-      const mimeType = parts[1];
-      const base64Data = parts[2];
-      console.log('[getBase64Data] Extracted mimeType:', mimeType, 'data length:', base64Data.length);
-      return { base64Data, mimeType };
-    } else {
-      // This case should ideally not happen anymore
-      console.error('[getBase64Data] ERROR: Received non-Data URL source despite changes:', source.substring(0, 100) + '...');
-      throw new Error('Background script received a non-Data URL source unexpectedly.');
-      // // Assume it's a URL (blob:, https:, etc.) that needs fetching
-      // console.log('Source is URL, fetching:', source);
-      // const fetchResponse = await fetch(source);
-      // if (!fetchResponse.ok) {
-      //   throw new Error(`Failed to fetch media URL: ${fetchResponse.statusText}`);
-      // }
-      // const blob = await fetchResponse.blob();
-      // const mimeType = mimeTypeHint || blob.type || 'application/octet-stream'; // Use hint or blob type
-      // console.log('Fetched blob, type:', mimeType);
-      // 
-      // // Convert blob to base64
-      // return new Promise((resolve, reject) => {
-      //   const reader = new FileReader();
-      //   reader.onloadend = () => {
-      //     if (typeof reader.result === 'string') {
-      //       const base64WithPrefix = reader.result;
-      //       const base64Data = base64WithPrefix.split(',')[1]; // Remove data:*/*;base64,
-      //       if (base64Data) {
-      //         console.log('Blob converted to base64');
-      //         resolve({ base64Data, mimeType });
-      //       } else {
-      //         reject(new Error('Failed to extract base64 data from blob reader result.'));
-      //       }
-      //     } else {
-      //       reject(new Error('Blob reader result was not a string.'));
-      //     }
-      //   };
-      //   reader.onerror = reject;
-      //   reader.readAsDataURL(blob);
-      // });
-    }
   }
   
-  // --- Main Alt Text Generation Logic ---
-  async function generateAltTextForMedia(
-    source: string, // Can be Data URL or fetchable URL
-    isVideo: boolean,
-    mimeTypeHint?: string // Optional hint for fetched blobs
-  ): Promise<{ altText: string } | { error: string }> {
+  // --- Alt Text Generation Logic (Modified to call Proxy) ---
+  // !! Copied from the incorrect background script version !!
+  async function generateAltTextViaProxy(
+    source: string, // Expecting Data URL from content script
+    isVideo: boolean // Keep this, might be useful later
+  ): Promise<PortResponse> { // Return type matches PortResponse
+      if (!CLOUD_FUNCTION_URL || CLOUD_FUNCTION_URL === 'YOUR_FUNCTION_URL_HERE') {
+          console.error('Cannot generate alt text: Cloud Function URL is not configured.');
+          return { error: 'Extension configuration error: Proxy URL not set.' };
+      }
+
       try {
-          if (!GEMINI_API_KEY) throw new Error('Missing Gemini API Key');
-          
-          // 1. Get Base64 data and final mime type
-          const { base64Data, mimeType } = await getBase64Data(source, mimeTypeHint);
-          console.log(`Generating alt text for ${isVideo ? 'video' : 'image'} (type: ${mimeType})`);
+        // 1. Get Base64 data and final mime type
+        const { base64Data, mimeType } = await getBase64Data(source);
+        console.log(`Sending request to proxy for ${mimeType}`);
 
-          // 2. Call Gemini API
-          const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
-          const instructions = systemInstructions;
-          
-          const geminiRequestBody = {
-              contents: [{
-                  parts: [
-                      { text: instructions },
-                      { inline_data: { mime_type: mimeType, data: base64Data } }
-                  ]
-              }]
-          };
-          
-          const geminiResponse = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(geminiRequestBody)
-          });
+        // 2. Prepare request body for the Cloud Function Proxy
+        const proxyRequestBody = {
+            base64Data: base64Data,
+            mimeType: mimeType
+            // isVideo: isVideo // We could send this if the function needed it
+        };
 
-          if (!geminiResponse.ok) {
-              const errorText = await geminiResponse.text();
-              console.error('Gemini API error response:', errorText);
-              throw new Error(`Gemini API error: ${geminiResponse.status} - ${errorText.substring(0, 100)}...`);
-          }
+        // 3. Call the Cloud Function Proxy
+        const proxyResponse = await fetch(CLOUD_FUNCTION_URL, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              // Origin header is automatically set by the browser
+            },
+            body: JSON.stringify(proxyRequestBody)
+        });
 
-          const geminiData = await geminiResponse.json();
-          // console.log('Gemini API full response:', JSON.stringify(geminiData)); // Verbose log
-          
-          const generatedText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
-          console.log('Extracted alt text:', generatedText);
+        // 4. Handle the Response
+        const responseData = await proxyResponse.json(); // Always try to parse JSON
 
-          if (!generatedText) {
-              console.error('Generated text missing from Gemini response:', geminiData);
-              throw new Error('Could not extract text from Gemini response');
-          }
+        if (!proxyResponse.ok) {
+            console.error('Proxy function returned an error:', proxyResponse.status, responseData);
+            const errorMsg = responseData?.error || proxyResponse.statusText || `Proxy request failed with status ${proxyResponse.status}`;
+            return { error: `AI Proxy Error: ${errorMsg}` };
+        }
 
-          return { altText: generatedText.trim() };
-          
+        if (responseData && typeof responseData.altText === 'string') {
+            // console.log('Received alt text from proxy:', responseData.altText);
+            return { altText: responseData.altText };
+        } else {
+            console.error('Unexpected successful response format from proxy:', responseData);
+            return { error: 'Received invalid response format from proxy service.' };
+        }
+
       } catch (error: unknown) {
-          console.error('Error in generateAltTextForMedia:', error);
-          const errorMessage = error instanceof Error ? error.message : 'Unknown error during generation';
-          return { error: errorMessage };
+          console.error('Error calling alt text proxy:', error);
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error communicating with proxy';
+          return { error: `Network/Request Error: ${errorMessage}` };
       }
   }
-
-  // --- Listener for Port Connections (from original button click) ---
+  
+  // --- Listener for Port Connections (from content script button click) ---
   browser.runtime.onConnect.addListener((port) => {
-    console.log(`Port connected: ${port.name}`, port.sender);
+    // console.log(`Port connected: ${port.name}`, port.sender);
 
     if (port.name === "altTextGenerator") {
-      port.onMessage.addListener(async (message: any) => { // Use any temporarily or define a specific interface for this message
-        console.log('Port message received:', message);
+      port.onMessage.addListener(async (message: any) => { // Use any for now, validated below
+        // console.log('Port message received:', message);
 
-        // --- START: Align with content script message format ---
-        // Check for 'action' key instead of 'type', and access properties directly
-        if (message.action === 'generateAltText' && message.imageUrl && typeof message.isVideo === 'boolean') {
-          // const payload = message.payload as GenerateAltTextPayload; // No longer using payload
-          console.log(`Port request: Generate alt text for ${message.imageUrl}, isVideo: ${message.isVideo}`);
+        // --- START: Updated validation & calling proxy ---
+        // Validate incoming message structure (accepts mediaUrl now)
+        if (message && message.action === 'generateAltText' && typeof message.mediaUrl === 'string' && typeof message.isVideo === 'boolean') {
+          console.log(`Port request: Generate alt text for ${message.mediaUrl.substring(0,60)}..., isVideo: ${message.isVideo}`);
           
-          // Use the main generation function, fetching if necessary
-          // Pass mimeTypeHint as undefined since we rely on the Data URL
-          const result = await generateAltTextForMedia(message.imageUrl, message.isVideo, undefined);
-        // --- END: Align with content script message format ---
+          // *** Call the updated proxy function (which now handles URL fetching) ***
+          const result: PortResponse = await generateAltTextViaProxy(message.mediaUrl, message.isVideo);
+          // --- END: Updated validation & calling proxy ---
           
           console.log('Sending result back via port:', result);
           try {
-            port.postMessage(result); // Send {altText: ...} or {error: ...}
+            // Only post message if the port is still connected
+            if (port) { 
+                port.postMessage(result); // Send {altText: ...} or {error: ...}
+            } else {
+                 console.warn("Port disconnected before response could be sent.");
+            }
           } catch (postError: unknown) {
-            console.error('Error posting message back via port:', postError);
+            // Handle cases where the port might disconnect just before posting
+            console.error('Error posting message back via port (port might have disconnected):', postError);
           }
         } else {
-          console.warn('Received unknown message format or action via port:', message);
+          console.warn('Received unknown or invalid message format via port:', message);
         }
       });
 
       port.onDisconnect.addListener(() => {
          console.log(`Port ${port.name} disconnected.`);
-         // Optional cleanup here
+         // No explicit cleanup needed here
       });
+    } else {
+        console.warn(`Unexpected port connection ignored: ${port.name}`);
     }
   });
   
   // --- Listener for General Messages (like MEDIA_INTERCEPTED) ---
-  browser.runtime.onMessage.addListener(async (message: BackgroundMessage, sender, sendResponse) => {
-    console.log('General message received:', message.type, 'from sender:', sender.tab?.id);
+  // !! Modified to disable automatic processing for now !!
+  browser.runtime.onMessage.addListener((message: any, sender, sendResponse) => {
+    // console.log('General message received:', message?.type, 'from:', sender?.tab?.id || sender?.id);
 
-    if (message.type === 'MEDIA_INTERCEPTED' && message.payload) {
-      const payload = message.payload as InterceptedMediaPayload;
-      console.log(`Intercepted media: ${payload.filename} (${payload.filetype}, ${payload.size} bytes)`);
-      
-      // --- TODO: Decide if/when to trigger generation for intercepted media --- 
-      // Option 1: Generate immediately (demonstrated below)
-      // Option 2: Store it and wait for user action (e.g., button click in popup)
-      // Option 3: Only generate if auto-mode is enabled in config
-      
-      console.log('Attempting immediate generation for intercepted media...');
-      const isVideo = payload.filetype.startsWith('video/');
-      
-      // Use the main generation function with the provided Data URL
-      const result = await generateAltTextForMedia(payload.dataUrl, isVideo, payload.filetype);
-      
-      console.log('Result for intercepted media:', result);
-      
-      // What to do with the result? 
-      // - Could send it back to the content script (though it might not expect it)
-      // - Could store it for later retrieval
-      // - Could update a popup UI
-      
-      // Example: Send acknowledgement back to content script
-      sendResponse({ status: 'Intercepted and processed', filename: payload.filename, result });
-      return true; // Indicate async response
-
+    if (message?.type === 'MEDIA_INTERCEPTED') {
+        console.log('MEDIA_INTERCEPTED received, but auto-processing via proxy is currently disabled.');
+        // --- TODO: Decide if/when to trigger generation for intercepted media --- 
+        // If you want to automatically generate, call generateAltTextViaProxy here:
+        // const payload = message.payload as InterceptedMediaPayload;
+        // const isVideo = payload.filetype.startsWith('video/');
+        // generateAltTextViaProxy(payload.dataUrl, isVideo).then(result => {
+        //    console.log('Auto-generated result for intercepted media:', result);
+        //    // Decide what to do with the result (e.g., send to content script, store)
+        // });
+        sendResponse({ status: 'Intercepted (auto-processing disabled)'});
+        return false; // Indicate sync response
     } else {
-      console.log('Ignoring unknown message type or missing payload:', message.type);
-      // Optional: Send response for unhandled types if needed
-      // sendResponse({ status: 'Unknown message type' });
+        console.log('Ignoring unknown general message type:', message?.type);
+        return false; // Indicate sync response, not handling this message
     }
-    
-    // Return false if not sending an asynchronous response.
-    return false; 
+    // No async work started, so return false
+    // return true; // Only return true if you intend to call sendResponse asynchronously
   });
-  
-  console.log('Background script event listeners attached.');
+
+  console.log('Background script proxy mode event listeners attached.');
 }); 

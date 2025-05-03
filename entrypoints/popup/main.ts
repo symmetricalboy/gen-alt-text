@@ -3,7 +3,7 @@ import './style.css';
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div>
     <div class="app-icon-container">
-      <img src="/icon/gen-alt-text.svg" alt="Extension Icon" width="48" height="48">
+      <img src="/icons/gen-alt-text.svg" alt="Extension Icon" width="48" height="48">
     </div>
     <h1>Bluesky Alt Text Generator</h1>
     <div class="description">

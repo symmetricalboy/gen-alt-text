@@ -127,49 +127,60 @@ export default defineContentScript({
         return null; // Fallback if no known container is found
     };
     
-    // Function to get media element as Data URL
-    const getMediaAsDataUrl = async (mediaElement: HTMLImageElement | HTMLVideoElement): Promise<string | null> => {
+    // Function to get media element source (URL or Data URL)
+    const getMediaSource = async (mediaElement: HTMLImageElement | HTMLVideoElement): Promise<string | null> => {
       try {
+        let src = '';
         if (mediaElement instanceof HTMLImageElement) {
-          // Handle Image
-          if (mediaElement.src.startsWith('data:')) {
-            return mediaElement.src;
-          } else if (mediaElement.src.startsWith('blob:')) {
-            const response = await fetch(mediaElement.src);
-            const blob = await response.blob();
-            return new Promise((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onloadend = () => resolve(reader.result as string);
-              reader.onerror = reject;
-              reader.readAsDataURL(blob);
-            });
-          } else {
-            // Attempt to draw to canvas for external images (might be blocked by CORS)
-            console.log('[getMediaAsDataUrl] Attempting canvas fallback for image src:', mediaElement.src);
-            const canvas = document.createElement('canvas');
-            canvas.width = mediaElement.naturalWidth || mediaElement.width;
-            canvas.height = mediaElement.naturalHeight || mediaElement.height;
-            const ctx = canvas.getContext('2d');
-            if (!ctx) throw new Error('Could not get 2D context');
-            ctx.drawImage(mediaElement, 0, 0);
-            return canvas.toDataURL(); // Defaults to png, or specify type e.g., 'image/jpeg'
-          }
+           src = mediaElement.currentSrc || mediaElement.src; // Use currentSrc for responsive images
         } else if (mediaElement instanceof HTMLVideoElement) {
-          // Handle Video - Capture current frame
-          console.log('[getMediaAsDataUrl] Capturing frame from video:', mediaElement);
-          const canvas = document.createElement('canvas');
-          canvas.width = mediaElement.videoWidth;
-          canvas.height = mediaElement.videoHeight;
-          const ctx = canvas.getContext('2d');
-          if (!ctx) throw new Error('Could not get 2D context');
-          ctx.drawImage(mediaElement, 0, 0, canvas.width, canvas.height);
-          return canvas.toDataURL('image/jpeg'); // Capture as JPEG
+           // Prefer source element if available
+           const sourceEl = mediaElement.querySelector('source');
+           src = sourceEl?.src || mediaElement.src;
+        }
+        
+        if (!src) {
+            console.error('[getMediaSource] Media element has no discernible src attribute.', mediaElement);
+            return null;
+        }
+
+        if (src.startsWith('data:')) {
+          console.log('[getMediaSource] Source is already a Data URL.');
+          return src;
+        } else if (src.startsWith('blob:')) {
+          console.log('[getMediaSource] Source is a Blob URL, converting to Data URL...');
+          const response = await fetch(src);
+          const blob = await response.blob();
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+        } else if (src.startsWith('http:') || src.startsWith('https:')) {
+          // Return the HTTP(S) URL directly for the background script to handle
+          console.log('[getMediaSource] Source is an HTTP(S) URL:', src);
+          return src;
+        } else {
+           console.warn('[getMediaSource] Unhandled src type:', src.substring(0, 30) + '...');
+           // Fallback: Try canvas for images (might fail cross-origin) but not for video
+           if (mediaElement instanceof HTMLImageElement) {
+                console.log('[getMediaSource] Attempting canvas fallback for image src:', src);
+                const canvas = document.createElement('canvas');
+                canvas.width = mediaElement.naturalWidth || mediaElement.width;
+                canvas.height = mediaElement.naturalHeight || mediaElement.height;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) throw new Error('Could not get 2D context for image fallback');
+                ctx.drawImage(mediaElement, 0, 0);
+                return canvas.toDataURL(); // Might throw CORS error
+           }
+           return null; // Cannot handle other types or video via canvas here
         }
       } catch (error) {
-        console.error('[getMediaAsDataUrl] Error converting media to Data URL:', error, mediaElement);
+        console.error('[getMediaSource] Error processing media source:', error, mediaElement);
         createToast('Error processing media. It might be protected or inaccessible.', 'error');
+        return null;
       }
-      return null;
     };
     
     // Function to add the generate button next to a textarea
@@ -195,7 +206,12 @@ export default defineContentScript({
           console.log('[addGenerateButton] Context is "Video settings", found composePostView in document for media search:', mediaSearchContainer);
       } else {
           mediaSearchContainer = contextContainer;
-          console.log('[addGenerateButton] Context is composePostView or Add alt text, targeting context container for media search:', mediaSearchContainer);
+          // Add specific log for GIF dialog
+          if (contextContainer.matches('[role="dialog"][aria-label*="alt text" i]')) {
+              console.log('[addGenerateButton] Context is "Add alt text" dialog (likely GIF), targeting dialog for media search:', mediaSearchContainer);
+          } else {
+              console.log('[addGenerateButton] Context is likely composePostView, targeting context container for media search:', mediaSearchContainer);
+          }
       }
       
       // --- START: Refine button existence check ---
@@ -222,7 +238,7 @@ export default defineContentScript({
       const button = document.createElement('button');
       button.id = BUTTON_ID;
       button.title = 'Generate Alt Text';
-      const iconUrl = browser.runtime.getURL("/icon/gen-alt-text.svg"); 
+      const iconUrl = browser.runtime.getURL("/icons/gen-alt-text.svg"); 
       button.innerHTML = `<img src="${iconUrl}" alt="Generate Alt Text Icon" width="20" height="20" style="display: block;">`;
       Object.assign(button.style, {
           marginLeft: '8px', padding: '4px', cursor: 'pointer', border: '1px solid #ccc',
@@ -268,10 +284,11 @@ export default defineContentScript({
 
         button.textContent = 'Processing Media...';
         button.style.color = '#000000'; 
-        const dataUrl = await getMediaAsDataUrl(mediaElement);
+        // Get the media source URL (could be data:, blob: converted to data:, or http(s):)
+        const mediaSource = await getMediaSource(mediaElement); 
 
-        if (!dataUrl) {
-             console.error('[generateAltText] Failed to get media as Data URL.');
+        if (!mediaSource) {
+             console.error('[generateAltText] Failed to get media source URL.');
              button.textContent = 'Error: Process Fail';
              button.style.color = '#000000';
              setTimeout(() => { 
@@ -283,7 +300,7 @@ export default defineContentScript({
         }
         
         const isVideo = mediaElement.tagName === 'VIDEO';
-        console.log(`[generateAltText] Got ${isVideo ? 'Video' : 'Image'} as Data URL (length: ${dataUrl.length})`);
+        console.log(`[generateAltText] Got ${isVideo ? 'Video' : 'Image'} source (type: ${mediaSource.substring(0, mediaSource.indexOf(':'))}, length: ${mediaSource.length})`);
 
         try {
             console.log('[generateAltText] Connecting to background...');
@@ -348,7 +365,8 @@ export default defineContentScript({
             });
 
             console.log('[generateAltText] Sending message...');
-            port.postMessage({ action: 'generateAltText', imageUrl: dataUrl, isVideo: isVideo });
+            // Send mediaUrl instead of imageUrl
+            port.postMessage({ action: 'generateAltText', mediaUrl: mediaSource, isVideo: isVideo }); 
             console.log('[generateAltText] Message sent.');
 
           } catch (error: unknown) {

@@ -2,7 +2,7 @@
   "name": "bluesky-alt-text",
   "description": "Automatically generate accessible alt text for images on Bluesky using Google Gemini AI.",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -20,8 +20,12 @@
   },
   "devDependencies": {
     "@types/chrome": "^0.0.313",
+    "@vitejs/plugin-react": "^4.4.1",
     "@wxt-dev/auto-icons": "^1.0.2",
-    "typescript": "^5.6.3",
-    "wxt": "^0.20.0"
+    "typescript": "^5.8.3",
+    "wxt": "^0.20.6"
+  },
+  "dependencies": {
+    "@atproto/api": "^0.15.5"
   }
 }
