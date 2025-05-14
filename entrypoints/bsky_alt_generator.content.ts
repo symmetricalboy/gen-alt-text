@@ -21,6 +21,7 @@ export default defineContentScript({
     const ALT_TEXT_SELECTOR = ALT_TEXT_SELECTORS.join(',');
     const BUTTON_ID = 'gemini-alt-text-button';
     const CAPTION_BUTTON_ID = 'gemini-caption-button';
+    const MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024; // 20MB
     
     // Define the mutation observer
     let manualModeObserver: MutationObserver | null = null;
@@ -170,15 +171,28 @@ export default defineContentScript({
 
         if (src.startsWith('data:')) {
           console.log('[getMediaSource] Source is already a Data URL.');
+          // Estimate size from Data URL
+          const base64Part = src.substring(src.indexOf(',') + 1);
+          const padding = base64Part.endsWith('==') ? 2 : base64Part.endsWith('=') ? 1 : 0;
+          const fileSize = (base64Part.length * (3/4)) - padding;
+
+          if (fileSize > MAX_FILE_SIZE_BYTES) {
+              console.warn(`[getMediaSource] Data URL estimated size (${(fileSize / (1024 * 1024)).toFixed(2)}MB) exceeds 20MB limit.`);
+              createToast(`File is too large (estimated ${(fileSize / (1024 * 1024)).toFixed(2)}MB). Maximum size is 20MB.`, 'error');
+              return null;
+          }
           return src;
         } else if (src.startsWith('blob:')) {
           console.log('[getMediaSource] Source is a Blob URL, processing...');
           try {
             const response = await fetch(src);
             const blob = await response.blob();
-            
-            // Process all videos in full up to 100MB
-            console.log(`[getMediaSource] Processing full video (size: ${(blob.size / (1024 * 1024)).toFixed(2)}MB)`);
+
+            if (blob.size > MAX_FILE_SIZE_BYTES) {
+              console.warn(`[getMediaSource] Blob URL file size (${(blob.size / (1024 * 1024)).toFixed(2)}MB) exceeds 20MB limit.`);
+              createToast(`File is too large (${(blob.size / (1024 * 1024)).toFixed(2)}MB). Maximum size is 20MB.`, 'error');
+              return null;
+            }
             
             // Normal processing for all videos and images
             return new Promise((resolve, reject) => {
@@ -188,13 +202,50 @@ export default defineContentScript({
               reader.readAsDataURL(blob);
             });
           } catch (fetchError) {
-            console.error('[getMediaSource] Error fetching or converting blob URL:', fetchError);
+            console.error('[getMediaSource] Error fetching or processing Blob URL:', fetchError);
             throw new Error(`Failed to process blob URL: ${fetchError instanceof Error ? fetchError.message : fetchError}`);
           }
-        } else if (src.startsWith('http:') || src.startsWith('https:')) {
-          // Return the HTTP(S) URL directly for the background script to handle
-          console.log('[getMediaSource] Source is an HTTP(S) URL:', src);
-          return src;
+        } else if (src.startsWith('http:') || src.startsWith('https')) {
+          console.log('[getMediaSource] Source is an HTTP(S) URL, fetching for size check and conversion:', src);
+          try {
+            const response = await fetch(src); // Fetch the actual file
+            if (!response.ok) {
+              createToast(`Failed to fetch media from URL (status: ${response.status}). It might be private or moved.`, 'error');
+              console.error(`[getMediaSource] HTTP error fetching ${src}: ${response.status} ${response.statusText}`);
+              return null;
+            }
+            const blob = await response.blob();
+
+            if (blob.size > MAX_FILE_SIZE_BYTES) {
+              console.warn(`[getMediaSource] HTTP(S) file size (${(blob.size / (1024 * 1024)).toFixed(2)}MB) exceeds 20MB limit.`);
+              createToast(`Remote file is too large (${(blob.size / (1024 * 1024)).toFixed(2)}MB). Maximum size is 20MB.`, 'error');
+              return null;
+            }
+            
+            // If size is OK, convert to Data URL to send to background
+            console.log(`[getMediaSource] HTTP(S) file fetched (size: ${(blob.size / (1024 * 1024)).toFixed(2)}MB), converting to Data URL.`);
+            return new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.onerror = (error) => {
+                console.error('[getMediaSource] Error converting fetched HTTP(S) blob to Data URL:', error);
+                reject(error);
+              };
+              reader.readAsDataURL(blob);
+            });
+
+          } catch (fetchError) {
+            console.error('[getMediaSource] Error fetching or processing HTTP(S) URL:', fetchError);
+            // Check if it's a network error vs. something else
+            let toastMessage = 'Error processing remote media. It might be inaccessible.';
+            if (fetchError instanceof TypeError && fetchError.message.toLowerCase().includes('failed to fetch')) { // Common browser network error
+                 toastMessage = 'Network error: Could not fetch remote media. Check your connection or if the URL is public.';
+            } else if (fetchError instanceof Error) {
+                toastMessage = `Error fetching media: ${fetchError.message.substring(0,100)}`;
+            }
+            createToast(toastMessage, 'error');
+            return null;
+          }
         } else {
            console.warn('[getMediaSource] Unhandled src type:', src.substring(0, 30) + '...');
            // Fallback: Try canvas for images (might fail cross-origin) but not for video
