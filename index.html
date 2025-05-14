@@ -251,14 +251,14 @@
     </main>
     
     <footer>
-        <p>© 2024 Symm. This tool uses AI to generate alt text for accessibility purposes. Always review AI-generated content before using.</p>
+        <p>AI alt text generator that improves accessibility by creating descriptive text for images and videos. Created with 💚 by <a href="https://bsky.app/profile/symm.app" target="_blank">@symm.app</a>.</p>
         <p>Also available as a <a href="https://github.com/symme-dev/gen-alt-text" target="_blank">browser extension</a>!</p>
     </footer>
     
     <script>
         // Constants
         const CLOUD_FUNCTION_URL = 'https://us-central1-symm-gemini.cloudfunctions.net/generateAltTextProxy';
-        const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+        const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
         
         // DOM Elements
         const fileInput = document.getElementById('file-input');
@@ -323,7 +323,7 @@
             if (!file) return;
             
             if (file.size > MAX_FILE_SIZE) {
-                showToast('File is too large. Maximum size is 5MB.', 'error');
+                showToast('File is too large. Maximum size is 10MB.', 'error');
                 return;
             }
             

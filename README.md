@@ -19,7 +19,7 @@ We also offer a simple web application that you can use from any device:
 **[https://alttext.symm.app](https://alttext.symm.app)**
 
 The web app allows you to:
-- Upload images or videos (up to 5MB)
+- Upload images or videos (up to 10MB)
 - Generate AI-powered alt text
 - Copy the results to your clipboard
 
