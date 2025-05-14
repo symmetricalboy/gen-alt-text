@@ -341,11 +341,11 @@ export default defineContentScript({
       button.id = BUTTON_ID;
       button.title = 'Generate Alt Text';
       const iconUrl = browser.runtime.getURL("/icons/gen-alt-text.svg"); 
-      button.innerHTML = `<img src="${iconUrl}" alt="Generate Alt Text Icon" width="20" height="20" style="display: block;">`;
+      button.innerHTML = `<img src="${iconUrl}" alt="Generate Alt Text Icon" width="20" height="20" style="display: block;"><span style="margin-left: 6px;">Generate Alt Text</span>`;
       Object.assign(button.style, {
-          marginLeft: '8px', padding: '4px', cursor: 'pointer', border: '1px solid #ccc',
+          marginLeft: '8px', padding: '6px 10px', cursor: 'pointer', border: '1px solid #ccc',
           borderRadius: '4px', backgroundColor: '#f0f0f0', display: 'flex', alignItems: 'center',
-          justifyContent: 'center'
+          justifyContent: 'center', fontSize: '12px', fontWeight: '500'
       });
 
       const originalButtonContent = button.innerHTML; 
@@ -356,11 +356,11 @@ export default defineContentScript({
         Object.assign(container.style, {
           position: 'relative',
           width: '100%',
-          height: '2px',
+          height: '4px',
           backgroundColor: '#e0e0e0',
-          borderRadius: '1px',
+          borderRadius: '2px',
           overflow: 'hidden',
-          marginTop: '2px'
+          marginTop: '4px'
         });
         
         const progressBar = document.createElement('div');
@@ -369,7 +369,8 @@ export default defineContentScript({
           height: '100%',
           width: '0%',
           backgroundColor: '#1da882',
-          transition: 'width 0.3s ease-in-out'
+          transition: 'width 0.3s ease-in-out',
+          boxShadow: '0 0 3px rgba(29, 168, 130, 0.5)'
         });
         
         container.appendChild(progressBar);
@@ -380,16 +381,54 @@ export default defineContentScript({
       const generateAltText = async () => {
         // Create and append progress container
         const { container: progressContainer, progressBar } = createProgressContainer();
+        
+        // Prepare the button for processing state
         button.innerHTML = '';
-        button.textContent = 'Finding Media...';
-        button.style.color = '#000000'; 
         button.disabled = true;
+        
+        // Create a status message element with better styling
+        const statusMessage = document.createElement('div');
+        Object.assign(statusMessage.style, {
+          fontSize: '12px',
+          fontWeight: '500',
+          color: '#1da882',
+          textAlign: 'center',
+          width: '100%',
+          whiteSpace: 'nowrap'
+        });
+        statusMessage.textContent = 'Finding Media...';
+        
+        // Clear button and add status message
+        button.innerHTML = '';
+        button.appendChild(statusMessage);
+        
+        // Ensure button has adequate width during processing
+        const originalWidth = button.offsetWidth;
+        const minWidth = Math.max(originalWidth, 100);
+        Object.assign(button.style, {
+          minWidth: `${minWidth}px`,
+          padding: '6px 8px',
+          backgroundColor: '#f9f9f9'
+        });
+        
+        // Add progress bar to bottom of button
         buttonContainer.appendChild(progressContainer);
         
         // Update progress function
         const updateProgress = (percent, message) => {
           progressBar.style.width = `${percent}%`;
-          button.textContent = message;
+          statusMessage.textContent = message;
+          
+          // Change color based on progress type
+          if (message.includes('Error')) {
+            statusMessage.style.color = '#e74c3c';
+          } else if (percent >= 90) {
+            statusMessage.style.color = '#1da882'; // Success green
+          } else if (percent >= 70) {
+            statusMessage.style.color = '#3498db'; // Processing blue
+          } else {
+            statusMessage.style.color = '#f39c12'; // Progress orange
+          }
         };
         
         // Start with initial progress
@@ -398,10 +437,13 @@ export default defineContentScript({
         if (!mediaSearchContainer) {
             console.error('[generateAltText] mediaSearchContainer is null! Cannot search for media.');
             updateProgress(100, 'Error: Internal');
-            button.style.color = '#000000'; 
             setTimeout(() => { 
                 button.innerHTML = originalButtonContent; 
-                button.style.color = ''; 
+                Object.assign(button.style, {
+                    minWidth: '',
+                    padding: '4px',
+                    backgroundColor: '#f0f0f0'
+                });
                 button.disabled = false;
                 buttonContainer.removeChild(progressContainer);
             }, 3000);
@@ -417,10 +459,13 @@ export default defineContentScript({
         if (!mediaElement || !(mediaElement instanceof HTMLImageElement || mediaElement instanceof HTMLVideoElement)) {
             console.error('[generateAltText] Could not find valid media element.');
             updateProgress(100, 'Error: No Media');
-            button.style.color = '#000000'; 
             setTimeout(() => { 
                 button.innerHTML = originalButtonContent; 
-                button.style.color = ''; 
+                Object.assign(button.style, {
+                    minWidth: '',
+                    padding: '4px',
+                    backgroundColor: '#f0f0f0'
+                });
                 button.disabled = false;
                 buttonContainer.removeChild(progressContainer);
             }, 2000);
@@ -461,12 +506,15 @@ export default defineContentScript({
         if (!mediaSource) {
           console.error('[generateAltText] Failed to get media source URL.');
           updateProgress(100, 'Error: Media Access Failed');
-          button.style.color = '#000000';
           createToast('Could not access media. Please try a different file.', 'error');
           
           setTimeout(() => { 
             button.innerHTML = originalButtonContent; 
-            button.style.color = ''; 
+            Object.assign(button.style, {
+                minWidth: '',
+                padding: '4px',
+                backgroundColor: '#f0f0f0'
+            });
             button.disabled = false;
             buttonContainer.removeChild(progressContainer);
           }, 3000);
@@ -480,11 +528,9 @@ export default defineContentScript({
           try {
             console.log('[processWithMedia] Connecting to background...');
             updateProgress(50, 'Connecting...');
-            button.style.color = '#000000'; 
             const port = browser.runtime.connect({ name: "altTextGenerator" });
             console.log('[processWithMedia] Connection established.');
-            updateProgress(60, 'Generating...');
-            button.style.color = '#000000';
+            updateProgress(60, 'Preparing Media...');
 
             // Add a timeout to handle potential hanging requests
             const timeoutId = setTimeout(() => {
@@ -494,17 +540,226 @@ export default defineContentScript({
               } catch (e) { /* ignore */ }
               
               updateProgress(100, 'Error: Timeout');
-              button.style.color = '#000000';
               createToast('Request timed out. The media might be too large or complex to process.', 'error');
               
               setTimeout(() => {
                 button.innerHTML = originalButtonContent;
-                button.style.color = '';
+                Object.assign(button.style, {
+                    minWidth: '',
+                    padding: '4px',
+                    backgroundColor: '#f0f0f0'
+                });
                 button.disabled = false;
                 buttonContainer.removeChild(progressContainer);
               }, 3000);
             }, 300000); // 5-minute timeout
 
+            // For large files, we need to directly upload to server instead of using messaging
+            const isLargeFile = mediaUrl.length > 1000000; // Roughly 1MB in base64
+            
+            if (isVideoMedia && isLargeFile) {
+              console.log(`[processWithMedia] Media is large (${(mediaUrl.length / 1024 / 1024).toFixed(2)}MB), using direct upload method`);
+              updateProgress(65, 'Processing Large Video...');
+              
+              // Extract basic information for the background script
+              const basicInfo = {
+                action: 'directUploadLargeMedia',
+                mediaType: isVideoMedia ? 'video' : 'image',
+                mimeType: mediaUrl.startsWith('data:') ? mediaUrl.split(';')[0].split(':')[1] : 'video/mp4',
+                fileSize: mediaUrl.length
+              };
+              
+              // Send only the metadata to the background script, not the full media
+              port.postMessage(basicInfo);
+              
+              // Show progress animation during generation
+              let progressVal = 65;
+              const progressInterval = setInterval(() => {
+                if (progressVal < 95) {
+                  progressVal += isVideoMedia ? 1 : 3; // Slower for videos
+                  updateProgress(progressVal, 'Generating...');
+                }
+              }, 1000);
+
+              port.onMessage.addListener(async (response: any) => {
+                // Handle the upload URL response
+                if (response.uploadUrl) {
+                  try {
+                    updateProgress(70, 'Uploading Media...');
+                    console.log('[processWithMedia] Received upload URL, sending media directly');
+                    
+                    // Extract the base64 data if this is a data URL
+                    let base64Data = mediaUrl;
+                    if (mediaUrl.startsWith('data:')) {
+                      base64Data = mediaUrl.split(',')[1];
+                    }
+                    
+                    // Convert base64 to blob for uploading
+                    const byteCharacters = atob(base64Data);
+                    const byteArrays = [];
+                    const sliceSize = 1024;
+                    
+                    for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
+                      const slice = byteCharacters.slice(offset, offset + sliceSize);
+                      const byteNumbers = new Array(slice.length);
+                      for (let i = 0; i < slice.length; i++) {
+                        byteNumbers[i] = slice.charCodeAt(i);
+                      }
+                      const byteArray = new Uint8Array(byteNumbers);
+                      byteArrays.push(byteArray);
+                    }
+                    
+                    const blob = new Blob(byteArrays, {type: basicInfo.mimeType});
+                    
+                    // Send the media directly to the upload URL
+                    const uploadResponse = await fetch(response.uploadUrl, {
+                      method: 'PUT',
+                      body: blob
+                    });
+                    
+                    if (uploadResponse.ok) {
+                      updateProgress(80, 'Media Uploaded');
+                      
+                      // Notify background that upload is complete
+                      port.postMessage({
+                        action: 'mediaUploadComplete',
+                        uploadId: response.uploadId
+                      });
+                    } else {
+                      throw new Error(`Upload failed with status ${uploadResponse.status}`);
+                    }
+                  } catch (uploadError) {
+                    console.error('[processWithMedia] Upload error:', uploadError);
+                    clearInterval(progressInterval);
+                    clearTimeout(timeoutId);
+                    updateProgress(100, 'Upload Error');
+                    createToast(`Error uploading media: ${uploadError.message}`, 'error');
+                    
+                    setTimeout(() => {
+                      button.innerHTML = originalButtonContent;
+                      Object.assign(button.style, {
+                        minWidth: '',
+                        padding: '4px',
+                        backgroundColor: '#f0f0f0'
+                      });
+                      button.disabled = false;
+                      buttonContainer.removeChild(progressContainer);
+                    }, 3000);
+                    
+                    try { port.disconnect(); } catch (e) { /* Ignore */ }
+                  }
+                } else if (response.altText) {
+                  // Clear the interval and timeout
+                  clearInterval(progressInterval);
+                  clearTimeout(timeoutId);
+                  
+                  console.log('[processWithMedia] Msg from background:', response);
+                  
+                  updateProgress(100, '✓ Done');
+                  textarea.value = response.altText;
+                  textarea.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                  
+                  // Always show toast now
+                  createToast(
+                    'Alt text generated! 🤖 Double-check it before posting, AI can make mistakes.',
+                    'success', 
+                    8000 
+                  );
+                  
+                  // Update status message
+                  if (!button.querySelector('div')) {
+                    // Create status message element if it doesn't exist
+                    const statusMessage = document.createElement('div');
+                    Object.assign(statusMessage.style, {
+                      fontSize: '12px',
+                      fontWeight: '500',
+                      textAlign: 'center',
+                      width: '100%',
+                      whiteSpace: 'nowrap',
+                      color: '#1da882' // Success green
+                    });
+                    button.innerHTML = '';
+                    button.appendChild(statusMessage);
+                  }
+                  
+                  const statusMessage = button.querySelector('div');
+                  statusMessage.textContent = '✓ Done';
+                  statusMessage.style.color = '#1da882'; 
+                  setTimeout(() => {
+                      button.innerHTML = originalButtonContent;
+                      Object.assign(button.style, {
+                        minWidth: '',
+                        padding: '4px',
+                        backgroundColor: '#f0f0f0'
+                      });
+                      button.disabled = false;
+                      buttonContainer.removeChild(progressContainer);
+                  }, 1500);
+                  
+                  try { port.disconnect(); } catch (e) { /* Ignore */ }
+                } else if (response.error) {
+                  // Handle error response
+                  clearInterval(progressInterval);
+                  clearTimeout(timeoutId);
+                  
+                  const errorMsg = typeof response.error === 'string' ? response.error : 'Unknown error';
+                  updateProgress(100, `Error: ${errorMsg.substring(0, 20)}...`);
+                  createToast(`Error: ${errorMsg}`, 'error');
+                  
+                  // Update status message
+                  if (!button.querySelector('div')) {
+                    // Create status message element if it doesn't exist
+                    const statusMessage = document.createElement('div');
+                    Object.assign(statusMessage.style, {
+                      fontSize: '12px',
+                      fontWeight: '500',
+                      textAlign: 'center',
+                      width: '100%',
+                      whiteSpace: 'nowrap'
+                    });
+                    button.innerHTML = '';
+                    button.appendChild(statusMessage);
+                  }
+                  
+                  const statusMessage = button.querySelector('div');
+                  statusMessage.textContent = `Error: ${errorMsg.substring(0, 20)}...`;
+                  statusMessage.style.color = '#e74c3c'; // Error red 
+                  setTimeout(() => {
+                      button.innerHTML = originalButtonContent;
+                      button.style.color = ''; 
+                      button.disabled = false;
+                      buttonContainer.removeChild(progressContainer);
+                  }, 3000);
+                  
+                  try { port.disconnect(); } catch (e) { /* Ignore */ }
+                }
+              });
+              
+              port.onDisconnect.addListener(() => {
+                // Clear the interval
+                clearInterval(progressInterval);
+                
+                const lastError = browser.runtime.lastError;
+                console.error('[processWithMedia] Port disconnected.', lastError || '(No error info)');
+                const currentText = button.textContent;
+                if (currentText && !currentText.includes('Done') && !currentText.includes('Error')) {
+                  updateProgress(100, 'Disconnect Err');
+                  button.style.color = '#000000'; 
+                  setTimeout(() => { 
+                      button.innerHTML = originalButtonContent; 
+                      button.style.color = ''; 
+                      button.disabled = false;
+                      buttonContainer.removeChild(progressContainer);
+                  }, 3000);
+                }
+              });
+              
+              return; // Exit early, we're handling through the direct upload flow
+            }
+            
+            // Standard flow for smaller files
+            updateProgress(60, 'Generating...');
+            
             // Show progress animation during generation
             let progressVal = 60;
             const progressInterval = setInterval(() => {
@@ -548,11 +803,37 @@ export default defineContentScript({
                 console.error('[processWithMedia] Unexpected message format:', response);
               }
               
-              button.textContent = statusText;
-              button.style.color = '#000000'; 
+              if (!button.querySelector('div')) {
+                // Create status message element if it doesn't exist
+                const statusMessage = document.createElement('div');
+                Object.assign(statusMessage.style, {
+                  fontSize: '12px',
+                  fontWeight: '500',
+                  textAlign: 'center',
+                  width: '100%',
+                  whiteSpace: 'nowrap'
+                });
+                button.innerHTML = '';
+                button.appendChild(statusMessage);
+              }
+              
+              // Update the status message
+              const statusMessage = button.querySelector('div');
+              statusMessage.textContent = statusText;
+              
+              // Set color based on status
+              if (isError) {
+                statusMessage.style.color = '#e74c3c'; // Error red
+              } else {
+                statusMessage.style.color = '#1da882'; // Success green
+              } 
               setTimeout(() => {
                   button.innerHTML = originalButtonContent;
-                  button.style.color = ''; 
+                  Object.assign(button.style, {
+                    minWidth: '',
+                    padding: '6px 10px',
+                    backgroundColor: '#f0f0f0'
+                  });
                   button.disabled = false;
                   buttonContainer.removeChild(progressContainer);
               }, isError ? 3000 : 1500);
@@ -572,14 +853,18 @@ export default defineContentScript({
                 button.style.color = '#000000'; 
                 setTimeout(() => { 
                     button.innerHTML = originalButtonContent; 
-                    button.style.color = ''; 
+                    Object.assign(button.style, {
+                      minWidth: '',
+                      padding: '4px',
+                      backgroundColor: '#f0f0f0'
+                    });
                     button.disabled = false;
                     buttonContainer.removeChild(progressContainer);
                 }, 3000);
               }
             });
 
-            // Send the message
+            // Send the message for smaller files
             console.log('[processWithMedia] Sending message...');
             port.postMessage({ 
               action: 'generateAltText', 
@@ -603,7 +888,11 @@ export default defineContentScript({
             button.style.color = '#000000'; 
             setTimeout(() => { 
                 button.innerHTML = originalButtonContent; 
-                button.style.color = ''; 
+                Object.assign(button.style, {
+                    minWidth: '',
+                    padding: '6px 10px',
+                    backgroundColor: '#f0f0f0'
+                });
                 button.disabled = false;
                 buttonContainer.removeChild(progressContainer);
             }, 3000);

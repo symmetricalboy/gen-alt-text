@@ -244,15 +244,103 @@ export default defineBackground(() => {
   
   // --- Listener for Port Connections (from content script button click) ---
   browser.runtime.onConnect.addListener((port) => {
-    // console.log(`Port connected: ${port.name}`, port.sender);
-
     if (port.name === "altTextGenerator") {
-      port.onMessage.addListener(async (message: any) => { // Use any for now, validated below
-        // console.log('Port message received:', message);
-
-        // --- START: Updated validation & calling proxy ---
-        // Validate incoming message structure (accepts mediaUrl now)
-        if (message && message.action === 'generateAltText' && typeof message.mediaUrl === 'string' && typeof message.isVideo === 'boolean') {
+      port.onMessage.addListener(async (message: any) => {
+        // Handle large media direct upload flow
+        if (message && message.action === 'directUploadLargeMedia') {
+          console.log(`Port request: Direct upload flow for large ${message.mediaType}, size: ${(message.fileSize / (1024 * 1024)).toFixed(2)}MB`);
+          
+          try {
+            // Generate a unique ID for this upload
+            const uploadId = `upload_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+            
+            // Get a temporary upload URL from the server
+            const uploadRequest = {
+              action: 'getUploadUrl',
+              mediaType: message.mediaType,
+              mimeType: message.mimeType,
+              fileSize: message.fileSize,
+              uploadId: uploadId
+            };
+            
+            // Request a direct upload URL from the server
+            console.log('Requesting direct upload URL from proxy service...');
+            const uploadUrlResponse = await fetch(CLOUD_FUNCTION_URL, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(uploadRequest)
+            });
+            
+            if (!uploadUrlResponse.ok) {
+              throw new Error(`Failed to get upload URL: ${uploadUrlResponse.status}`);
+            }
+            
+            const uploadUrlData = await uploadUrlResponse.json();
+            
+            if (!uploadUrlData.uploadUrl) {
+              throw new Error('Server did not provide an upload URL');
+            }
+            
+            // Send the upload URL back to the content script
+            port.postMessage({
+              uploadUrl: uploadUrlData.uploadUrl,
+              uploadId: uploadId
+            });
+            
+            // Wait for confirmation that the upload is complete
+            return; // This listener will continue processing next messages
+          } catch (error) {
+            console.error('Error setting up direct upload:', error);
+            port.postMessage({ 
+              error: `Error setting up direct upload: ${error.message}` 
+            });
+          }
+        } 
+        
+        // Handle notification that a direct upload is complete
+        else if (message && message.action === 'mediaUploadComplete') {
+          console.log(`Media upload complete for ID: ${message.uploadId}`);
+          
+          try {
+            // Process the uploaded file with the proxy service
+            const processRequest = {
+              action: 'processUploadedMedia',
+              uploadId: message.uploadId
+            };
+            
+            // Call the proxy function to process the uploaded media
+            const processResponse = await fetch(CLOUD_FUNCTION_URL, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(processRequest)
+            });
+            
+            if (!processResponse.ok) {
+              throw new Error(`Failed to process uploaded media: ${processResponse.status}`);
+            }
+            
+            const processData = await processResponse.json();
+            
+            if (processData.altText) {
+              // Send the result back to the content script
+              port.postMessage({ altText: processData.altText });
+            } else {
+              throw new Error('No alt text received from server');
+            }
+          } catch (error) {
+            console.error('Error processing uploaded media:', error);
+            port.postMessage({ 
+              error: `Error processing media: ${error.message}` 
+            });
+          }
+        }
+        
+        // Standard flow for direct media URL handling
+        else if (message && message.action === 'generateAltText' && typeof message.mediaUrl === 'string' && typeof message.isVideo === 'boolean') {
           console.log(`Port request: Generate alt text for ${message.mediaUrl.substring(0,60)}..., isVideo: ${message.isVideo}`);
           
           // Extract data about the file size if available
@@ -263,9 +351,8 @@ export default defineBackground(() => {
             console.log(`Processing large video (estimated size: ${(fileSize / (1024 * 1024)).toFixed(2)}MB)`);
           }
           
-          // *** Call the updated proxy function (which now handles URL fetching) ***
+          // Call the proxy function
           const result: PortResponse = await generateAltTextViaProxy(message.mediaUrl, message.isVideo, isLargeVideo);
-          // --- END: Updated validation & calling proxy ---
           
           console.log('Sending result back via port:', result);
           try {

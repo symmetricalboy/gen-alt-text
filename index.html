@@ -329,6 +329,11 @@
                 return;
             }
             
+            // For extremely large video files, warn about potential issues
+            if (file.type.startsWith('video/') && file.size > 80 * 1024 * 1024) {
+                showToast('Warning: Videos over 80MB may experience processing issues.', 'warning', 6000);
+            }
+            
             currentFile = file;
             
             // Clear previous preview
@@ -373,6 +378,9 @@
             // Reset result
             resultBox.innerHTML = '<p style="color: #666;">Click "Generate Alt Text" to analyze this media...</p>';
             copyBtn.disabled = true;
+            
+            // Log file details
+            console.log(`Selected file: ${file.name}, type: ${file.type}, size: ${(file.size / (1024 * 1024)).toFixed(2)}MB`);
         }
         
         // Generate alt text
@@ -396,8 +404,16 @@
                 }
                 
                 // Convert to base64
+                resultBox.innerHTML = '<p style="color: #666;">Preparing file: 0% complete</p>';
                 const base64Data = await fileToBase64(currentFile);
                 const mimeType = currentFile.type;
+                
+                resultBox.innerHTML = '<p style="color: #666;">Preparing file: 100% complete</p>';
+                
+                // Update status to show we're now sending to API
+                setTimeout(() => {
+                    resultBox.innerHTML = '<p style="color: #666;">Sending to AI service...</p>';
+                }, 500);
                 
                 // Create an AbortController to handle timeout
                 const controller = new AbortController();
@@ -408,6 +424,21 @@
                     controller.abort();
                 }, timeoutDuration);
                 
+                // Update status to show the API is processing
+                setTimeout(() => {
+                    resultBox.innerHTML = '<p style="color: #666;">AI service is processing your video. This may take several minutes for large files...</p>';
+                }, 3000);
+                
+                // Show processing timer for large videos
+                let processingTime = 0;
+                let processingTimer;
+                if (currentFile.size > 50 * 1024 * 1024) {
+                    processingTimer = setInterval(() => {
+                        processingTime += 15;
+                        resultBox.innerHTML = `<p style="color: #666;">Still processing... (${processingTime} seconds elapsed)</p>`;
+                    }, 15000); // Update every 15 seconds
+                }
+                
                 // Full video processing regardless of size
                 const requestBody = {
                     base64Data,
@@ -416,31 +447,70 @@
                     fileSize: currentFile.size
                 };
                 
-                // Call the proxy function
-                const response = await fetch(CLOUD_FUNCTION_URL, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(requestBody),
-                    signal
-                });
-                
-                // Clear timeout since request completed
-                clearTimeout(timeoutId);
-                
-                const data = await response.json();
-                
-                if (!response.ok) {
-                    throw new Error(data.error || 'Error generating alt text');
+                // For extra large files, try to optimize the payload
+                if (currentFile.size > 80 * 1024 * 1024 && currentFile.type.startsWith('video/')) {
+                    console.log('Optimizing request for very large video...');
+                    // Set a flag to indicate this is a large file
+                    requestBody.isLargeVideo = true;
+                    
+                    // Add metadata that might help the server
+                    if (currentMediaElement && currentMediaElement instanceof HTMLVideoElement) {
+                        requestBody.videoDuration = currentMediaElement.duration || 0;
+                        requestBody.videoWidth = currentMediaElement.videoWidth || 0;
+                        requestBody.videoHeight = currentMediaElement.videoHeight || 0;
+                    }
                 }
                 
-                if (data.altText) {
-                    resultBox.textContent = data.altText;
-                    copyBtn.disabled = false;
-                    showToast('Alt text generated successfully!', 'success');
-                } else {
-                    throw new Error('No alt text received from the server');
+                console.log(`Sending ${(base64Data.length / (1024 * 1024)).toFixed(2)}MB of data to API...`);
+                
+                // Call the proxy function
+                console.log(`Sending ${(base64Data.length / (1024 * 1024)).toFixed(2)}MB of data to API...`);
+                
+                try {
+                    // For extremely large files, add more logging
+                    const startTime = Date.now();
+                    
+                    const response = await fetch(CLOUD_FUNCTION_URL, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(requestBody),
+                        signal
+                    });
+                    
+                    const requestDuration = ((Date.now() - startTime) / 1000).toFixed(1);
+                    console.log(`API request completed in ${requestDuration} seconds with status: ${response.status}`);
+                    
+                    // Clear timeout and timer since request completed
+                    clearTimeout(timeoutId);
+                    if (processingTimer) clearInterval(processingTimer);
+                    
+                    // Handle non-JSON responses
+                    const contentType = response.headers.get('content-type');
+                    if (!contentType || !contentType.includes('application/json')) {
+                        console.error('Received non-JSON response:', contentType);
+                        throw new Error(`Server returned non-JSON response: ${contentType}`);
+                    }
+                    
+                    const data = await response.json();
+                    console.log('Response data received:', data ? 'success' : 'empty');
+                    
+                    if (!response.ok) {
+                        throw new Error(data.error || `Error ${response.status}: ${response.statusText}`);
+                    }
+                    
+                    if (data.altText) {
+                        resultBox.textContent = data.altText;
+                        copyBtn.disabled = false;
+                        showToast('Alt text generated successfully!', 'success');
+                    } else {
+                        throw new Error('No alt text received from the server');
+                    }
+                } catch (fetchError) {
+                    // Network or fetch-related errors
+                    console.error('Fetch error:', fetchError);
+                    throw fetchError;
                 }
             } catch (error) {
                 console.error('Error generating alt text:', error);
@@ -452,6 +522,8 @@
                     errorMessage = 'Network error. Please check your connection and try again.';
                 } else if (error.message.includes('413') || error.message.includes('too large')) {
                     errorMessage = 'The file is too large for the server to process. Please try a smaller file.';
+                } else if (error.message.includes('SyntaxError') || error.message.includes('JSON')) {
+                    errorMessage = 'Received an invalid response from the server. The service might be experiencing issues.';
                 }
                 
                 resultBox.innerHTML = `<p style="color: var(--error-color);">Error: ${errorMessage}</p>`;
@@ -540,12 +612,17 @@
                 };
                 reader.onerror = error => reject(error);
                 
-                // Add progress event
+                // Add progress event with more frequent updates
                 reader.onprogress = (event) => {
                     if (event.lengthComputable) {
                         const percentLoaded = Math.round((event.loaded / event.total) * 100);
-                        if (file.size > 10 * 1024 * 1024) { // Only show progress for files > 10MB
+                        if (file.size > 5 * 1024 * 1024) { // Show progress for files > 5MB
                             resultBox.innerHTML = `<p style="color: #666;">Preparing file: ${percentLoaded}% complete</p>`;
+                            
+                            // Log progress for debugging large files
+                            if (percentLoaded % 25 === 0 || percentLoaded === 99) {
+                                console.log(`File preparation: ${percentLoaded}% complete (${(event.loaded / (1024 * 1024)).toFixed(2)}MB / ${(event.total / (1024 * 1024)).toFixed(2)}MB)`);
+                            }
                         }
                     }
                 };
@@ -568,7 +645,7 @@
         }
         
         // Show toast notification
-        function showToast(message, type = 'success') {
+        function showToast(message, type = 'success', duration = 3000) {
             // Remove any existing toasts
             const existingToast = document.querySelector('.toast');
             if (existingToast) {
@@ -586,7 +663,7 @@
             // Apply styles to make visible
             toast.style.opacity = '1';
             
-            // Remove after 3 seconds
+            // Remove after duration
             setTimeout(() => {
                 toast.style.opacity = '0';
                 setTimeout(() => {
@@ -594,7 +671,7 @@
                         toast.parentNode.removeChild(toast);
                     }
                 }, 300);
-            }, 3000);
+            }, duration);
         }
     </script>
 </body>
