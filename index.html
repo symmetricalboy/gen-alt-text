@@ -7,8 +7,8 @@
     <link rel="icon" href="public/icons/favicon.ico" type="image/x-icon">
     <style>
         :root {
-            --primary-color: #1da882;
-            --primary-hover: #18866a;
+            --primary-color: #208bfe;
+            --primary-hover: #1a70c5;
             --secondary-color: #007eda;
             --dark-color: #333;
             --light-color: #f8f9fa;
@@ -235,7 +235,10 @@
                 <!-- Preview will be inserted here -->
             </div>
             
-            <button id="generate-btn" disabled>Generate Alt Text</button>
+            <div class="button-group">
+                <button id="generate-btn" disabled>Generate Alt Text</button>
+                <button id="caption-btn" class="btn-secondary" style="display: none;">Generate Captions</button>
+            </div>
         </section>
         
         <section class="result-section">
@@ -246,7 +249,6 @@
             
             <div class="button-group">
                 <button id="copy-btn" class="btn-secondary" disabled>Copy to Clipboard</button>
-                <button id="caption-btn" class="btn-secondary" style="display: none;">Generate Captions</button>
             </div>
         </section>
     </main>
@@ -417,6 +419,10 @@
                 // For large videos, show a warning
                 if (currentFile.type.startsWith('video/') && currentFile.size > 10 * 1024 * 1024) {
                     resultBox.innerHTML = `<p style="color: orange;">Processing large video (${(currentFile.size / (1024 * 1024)).toFixed(1)}MB). This may take several minutes...</p>`;
+                } else if (currentFile.type.startsWith('video/')) {
+                    resultBox.innerHTML = '<p style="color: #666;">Processing video...</p>';
+                } else {
+                    resultBox.innerHTML = '<p style="color: #666;">Processing image...</p>';
                 }
                 
                 // Convert to base64

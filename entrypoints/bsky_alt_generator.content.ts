@@ -20,6 +20,9 @@ export default defineContentScript({
     const BUTTON_ID = 'gemini-alt-text-button';
     const CAPTION_BUTTON_ID = 'gemini-caption-button';
     
+    // Define the mutation observer
+    let manualModeObserver: MutationObserver | null = null;
+    
     // Toast notification system
     const createToast = (message: string, type: 'info' | 'success' | 'error' | 'warning' = 'info', duration: number = 8000) => {
       let toastContainer = document.getElementById('gemini-toast-container');
@@ -40,7 +43,7 @@ export default defineContentScript({
         transition: 'all 0.3s ease'
       });
       
-      const colors = { success: '#1da882', error: '#e53935', warning: '#f59f0b', info: '#007eda' };
+      const colors = { success: '#208bfe', error: '#e53935', warning: '#f59f0b', info: '#007eda' };
       toast.style.backgroundColor = colors[type] || colors.info;
       toast.textContent = message;
       
@@ -369,9 +372,9 @@ export default defineContentScript({
           position: 'absolute',
           height: '100%',
           width: '0%',
-          backgroundColor: '#1da882',
+          backgroundColor: '#208bfe',
           transition: 'width 0.3s ease-in-out',
-          boxShadow: '0 0 3px rgba(29, 168, 130, 0.5)'
+          boxShadow: '0 0 3px rgba(32, 139, 254, 0.5)'
         });
         
         container.appendChild(progressBar);
@@ -392,7 +395,7 @@ export default defineContentScript({
         Object.assign(statusMessage.style, {
           fontSize: '12px',
           fontWeight: '500',
-          color: '#1da882',
+          color: '#208bfe',
           textAlign: 'center',
           width: '100%',
           whiteSpace: 'nowrap'
@@ -424,7 +427,7 @@ export default defineContentScript({
           if (message.includes('Error')) {
             statusMessage.style.color = '#e74c3c';
           } else if (percent >= 90) {
-            statusMessage.style.color = '#1da882'; // Success green
+            statusMessage.style.color = '#208bfe'; // Success blue
           } else if (percent >= 70) {
             statusMessage.style.color = '#3498db'; // Processing blue
           } else {
@@ -473,11 +476,11 @@ export default defineContentScript({
             return;
         }
 
-        updateProgress(20, 'Processing Media...');
+        const isVideo = mediaElement.tagName === 'VIDEO';
+        updateProgress(20, isVideo ? 'Processing Video...' : 'Processing Image...');
         button.style.color = '#000000'; 
         
         // Check if this is a large video 
-        const isVideo = mediaElement.tagName === 'VIDEO';
         let isLargeVideo = false;
         
         if (isVideo) {
@@ -701,7 +704,7 @@ export default defineContentScript({
                       textAlign: 'center',
                       width: '100%',
                       whiteSpace: 'nowrap',
-                      color: '#1da882' // Success green
+                      color: '#208bfe' // Success blue
                     });
                     button.innerHTML = '';
                     button.appendChild(statusMessage);
@@ -709,7 +712,7 @@ export default defineContentScript({
                   
                   const statusMessage = button.querySelector('div');
                   statusMessage.textContent = '✓ Done';
-                  statusMessage.style.color = '#1da882'; 
+                  statusMessage.style.color = '#208bfe'; 
                   setTimeout(() => {
                       button.innerHTML = originalButtonContent;
                       Object.assign(button.style, {
@@ -850,7 +853,7 @@ export default defineContentScript({
               if (isError) {
                 statusMessage.style.color = '#e74c3c'; // Error red
               } else {
-                statusMessage.style.color = '#1da882'; // Success green
+                statusMessage.style.color = '#208bfe'; // Success blue
               } 
               setTimeout(() => {
                   button.innerHTML = originalButtonContent;
