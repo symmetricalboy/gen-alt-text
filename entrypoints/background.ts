@@ -79,17 +79,8 @@ export default defineBackground(() => {
               const blob = await response.blob();
               console.log(`[getBase64Data] Fetched blob of size: ${blob.size} bytes, type: ${blob.type}`);
               
-              // Add an optimization for large videos
-              if (isLargeVideo || blob.size > MAX_DIRECT_BLOB_SIZE) {
-                  console.log('[getBase64Data] Large media detected, using optimized processing');
-                  const mimeType = blob.type;
-                  
-                  // For large videos, get a better frame sample instead of the full video
-                  if (mimeType.startsWith('video/')) {
-                      console.log('[getBase64Data] Processing large video with optimized method');
-                      return await optimizedVideoProcessing(blob, mimeType);
-                  }
-              }
+              // Process all videos in full
+              console.log(`[getBase64Data] Processing full media file (size: ${(blob.size / (1024 * 1024)).toFixed(2)}MB)`);
               
               const dataUrl = await blobToDataURL(blob);
               console.log('[getBase64Data] Successfully fetched and converted URL to Data URL.');
@@ -110,17 +101,8 @@ export default defineBackground(() => {
               const blob = await response.blob();
               console.log(`[getBase64Data] Fetched blob of size: ${blob.size} bytes, type: ${blob.type}`);
               
-              // Add an optimization for large videos
-              if (isLargeVideo || blob.size > MAX_DIRECT_BLOB_SIZE) {
-                  console.log('[getBase64Data] Large media detected, using optimized processing');
-                  const mimeType = blob.type;
-                  
-                  // For large videos, get a better frame sample instead of the full video
-                  if (mimeType.startsWith('video/')) {
-                      console.log('[getBase64Data] Processing large video with optimized method');
-                      return await optimizedVideoProcessing(blob, mimeType);
-                  }
-              }
+              // Process all videos in full
+              console.log(`[getBase64Data] Processing full media file (size: ${(blob.size / (1024 * 1024)).toFixed(2)}MB)`);
               
               const dataUrl = await blobToDataURL(blob);
               console.log('[getBase64Data] Successfully fetched and converted blob URL to Data URL.');
@@ -138,12 +120,10 @@ export default defineBackground(() => {
   
   // Helper function to optimize video processing by extracting frames
   async function optimizedVideoProcessing(videoBlob: Blob, mimeType: string): Promise<{ base64Data: string; mimeType: string }> {
-      // Since document is not available in background scripts, we can't use DOM elements
-      // Instead, for large videos, we'll just convert the blob directly
       try {
-          console.log('[optimizedVideoProcessing] Processing video using direct method (no DOM access)');
+          console.log(`[optimizedVideoProcessing] Processing full video of size: ${videoBlob.size / (1024 * 1024).toFixed(2)}MB`);
           
-          // Simple fallback: just convert the blob to base64 directly
+          // Convert the blob to base64 directly
           const dataUrl = await blobToDataURL(videoBlob);
           
           // Extract the base64 data
@@ -166,7 +146,7 @@ export default defineBackground(() => {
   async function generateAltTextViaProxy(
     source: string, // Expecting Data URL from content script
     isVideo: boolean, // Keep this, might be useful later
-    isLargeVideo: boolean = false // New flag for optimized processing
+    isLargeVideo: boolean = false // Flag for handling large videos
   ): Promise<PortResponse> { // Return type matches PortResponse
       if (!CLOUD_FUNCTION_URL || CLOUD_FUNCTION_URL === 'YOUR_FUNCTION_URL_HERE') {
           console.error('Cannot generate alt text: Cloud Function URL is not configured.');
@@ -176,68 +156,85 @@ export default defineBackground(() => {
       try {
         // 1. Get Base64 data and final mime type
         const { base64Data, mimeType } = await getBase64Data(source, isLargeVideo);
-        console.log(`Sending request to proxy for ${mimeType}`);
+        console.log(`Sending request to proxy for ${mimeType}, data size: ${(base64Data.length / (1024 * 1024)).toFixed(2)}MB`);
 
-        // Check if this is a potentially problematic large video
+        // Check if this is a large data source
         const isLargeData = base64Data.length > 1000000; // Over 1MB of base64 data
         if (isVideo && isLargeData) {
-          console.warn('Large video detected, this may result in a very long description');
+          console.log(`Processing large video data (${(base64Data.length / (1024 * 1024)).toFixed(2)}MB)`);
         }
 
         // 2. Prepare request body for the Cloud Function Proxy
         const proxyRequestBody = {
             base64Data: base64Data,
             mimeType: mimeType,
-            isVideo: isVideo // Now sending this to allow backend to optimize for videos
+            isVideo: isVideo, 
+            fileName: "file." + (mimeType.split('/')[1] || (isVideo ? "mp4" : "jpg")),
+            fileSize: base64Data.length // File size based on base64 length
         };
 
-        // 3. Call the Cloud Function Proxy
-        const proxyResponse = await fetch(CLOUD_FUNCTION_URL, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              // Origin header is automatically set by the browser
-            },
-            body: JSON.stringify(proxyRequestBody)
-        });
+        // Set appropriate timeout based on file size
+        const timeoutDuration = base64Data.length > 4000000 ? 300000 : 180000; // 5 min for larger files, 3 min for smaller
+        
+        // 3. Call the Cloud Function Proxy with proper timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutDuration);
+        
+        try {
+          const proxyResponse = await fetch(CLOUD_FUNCTION_URL, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(proxyRequestBody),
+              signal: controller.signal
+          });
+          
+          clearTimeout(timeoutId);
+          
+          // 4. Handle the Response
+          const responseData = await proxyResponse.json();
 
-        // 4. Handle the Response
-        const responseData = await proxyResponse.json(); // Always try to parse JSON
+          if (!proxyResponse.ok) {
+              console.error('Proxy function returned an error:', proxyResponse.status, responseData);
+              const errorMsg = responseData?.error || proxyResponse.statusText || `Proxy request failed with status ${proxyResponse.status}`;
+              return { error: `AI Proxy Error: ${errorMsg}` };
+          }
 
-        if (!proxyResponse.ok) {
-            console.error('Proxy function returned an error:', proxyResponse.status, responseData);
-            const errorMsg = responseData?.error || proxyResponse.statusText || `Proxy request failed with status ${proxyResponse.status}`;
-            return { error: `AI Proxy Error: ${errorMsg}` };
-        }
-
-        if (responseData && typeof responseData.altText === 'string') {
-            // console.log('Received alt text from proxy:', responseData.altText);
-            
-            let altText = responseData.altText;
-            
-            // Check if text exceeds the maximum length
-            if (altText.length > MAX_ALT_TEXT_LENGTH) {
-              console.warn(`Alt text exceeds maximum length (${altText.length} > ${MAX_ALT_TEXT_LENGTH}), condensing instead of truncating...`);
+          if (responseData && typeof responseData.altText === 'string') {
+              // console.log('Received alt text from proxy:', responseData.altText);
               
-              // Use Gemini to condense the text instead of truncating
-              altText = await condenseAltText(altText, isVideo);
+              let altText = responseData.altText;
               
-              // Add a note if the text was condensed
-              if (isVideo) {
-                const condensedNote = "[Note: This video description was automatically condensed to fit character limits.]\n\n";
-                // Only add the note if there's room for it
-                if (altText.length + condensedNote.length <= MAX_ALT_TEXT_LENGTH) {
-                  altText = condensedNote + altText;
+              // Check if text exceeds the maximum length
+              if (altText.length > MAX_ALT_TEXT_LENGTH) {
+                console.warn(`Alt text exceeds maximum length (${altText.length} > ${MAX_ALT_TEXT_LENGTH}), condensing instead of truncating...`);
+                
+                // Use Gemini to condense the text instead of truncating
+                altText = await condenseAltText(altText, isVideo);
+                
+                // Add a note if the text was condensed
+                if (isVideo) {
+                  const condensedNote = "[Note: This video description was automatically condensed to fit character limits.]\n\n";
+                  // Only add the note if there's room for it
+                  if (altText.length + condensedNote.length <= MAX_ALT_TEXT_LENGTH) {
+                    altText = condensedNote + altText;
+                  }
                 }
               }
-            }
-            
-            return { altText: altText };
-        } else {
-            console.error('Unexpected successful response format from proxy:', responseData);
-            return { error: 'Received invalid response format from proxy service.' };
+              
+              return { altText: altText };
+          } else {
+              console.error('Unexpected successful response format from proxy:', responseData);
+              return { error: 'Received invalid response format from proxy service.' };
+          }
+        } catch (e) {
+          clearTimeout(timeoutId);
+          if (e.name === 'AbortError') {
+            return { error: 'Request timed out after several minutes. The video may be too complex to process.' };
+          }
+          throw e; // Re-throw for the outer catch block
         }
-
       } catch (error: unknown) {
           console.error('Error calling alt text proxy:', error);
           const errorMessage = error instanceof Error ? error.message : 'Unknown error communicating with proxy';
@@ -258,10 +255,12 @@ export default defineBackground(() => {
         if (message && message.action === 'generateAltText' && typeof message.mediaUrl === 'string' && typeof message.isVideo === 'boolean') {
           console.log(`Port request: Generate alt text for ${message.mediaUrl.substring(0,60)}..., isVideo: ${message.isVideo}`);
           
-          // Extract isLargeVideo flag if present
-          const isLargeVideo = !!message.isLargeVideo;
+          // Extract data about the file size if available
+          const fileSize = message.fileSize || message.mediaUrl.length;
+          const isLargeVideo = message.isVideo && fileSize > 1000000; // Over 1MB
+          
           if (isLargeVideo) {
-            console.log('Message indicates this is a large video, will use optimized processing');
+            console.log(`Processing large video (estimated size: ${(fileSize / (1024 * 1024)).toFixed(2)}MB)`);
           }
           
           // *** Call the updated proxy function (which now handles URL fetching) ***

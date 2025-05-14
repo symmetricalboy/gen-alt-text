@@ -356,6 +356,15 @@
                 const reader = new FileReader();
                 reader.onload = (e) => { video.src = e.target.result; };
                 reader.readAsDataURL(file);
+                
+                // Add file size warning for videos
+                if (file.size > 20 * 1024 * 1024) {
+                    const warning = document.createElement('p');
+                    warning.style.color = 'orange';
+                    warning.style.marginTop = '10px';
+                    warning.textContent = `Note: This video is ${(file.size / (1024 * 1024)).toFixed(1)}MB. Large videos may take longer to process.`;
+                    previewContainer.appendChild(warning);
+                }
             }
             
             previewContainer.style.display = 'block';
@@ -374,11 +383,38 @@
             const originalBtnText = generateBtn.innerHTML;
             generateBtn.innerHTML = '<span class="loading"></span>Generating...';
             generateBtn.disabled = true;
+            resultBox.innerHTML = '<p style="color: #666;">Processing... This may take longer for large videos.</p>';
+            
+            // Set a timeout for the request - longer for large videos
+            const timeoutDuration = currentFile.size > 50 * 1024 * 1024 ? 300000 : 180000; // 5 minutes for large files, 3 minutes for smaller ones
+            let timeoutId;
             
             try {
+                // For large videos, show a warning
+                if (currentFile.type.startsWith('video/') && currentFile.size > 20 * 1024 * 1024) {
+                    resultBox.innerHTML = `<p style="color: orange;">Processing large video (${(currentFile.size / (1024 * 1024)).toFixed(1)}MB). This may take several minutes...</p>`;
+                }
+                
                 // Convert to base64
                 const base64Data = await fileToBase64(currentFile);
                 const mimeType = currentFile.type;
+                
+                // Create an AbortController to handle timeout
+                const controller = new AbortController();
+                const signal = controller.signal;
+                
+                // Set timeout
+                timeoutId = setTimeout(() => {
+                    controller.abort();
+                }, timeoutDuration);
+                
+                // Full video processing regardless of size
+                const requestBody = {
+                    base64Data,
+                    mimeType,
+                    fileName: currentFile.name,
+                    fileSize: currentFile.size
+                };
                 
                 // Call the proxy function
                 const response = await fetch(CLOUD_FUNCTION_URL, {
@@ -386,11 +422,12 @@
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({
-                        base64Data, 
-                        mimeType
-                    })
+                    body: JSON.stringify(requestBody),
+                    signal
                 });
+                
+                // Clear timeout since request completed
+                clearTimeout(timeoutId);
                 
                 const data = await response.json();
                 
@@ -407,18 +444,92 @@
                 }
             } catch (error) {
                 console.error('Error generating alt text:', error);
-                resultBox.innerHTML = `<p style="color: var(--error-color);">Error: ${error.message}</p>`;
-                showToast(error.message, 'error');
+                
+                let errorMessage = error.message;
+                if (error.name === 'AbortError') {
+                    errorMessage = 'Request timed out after several minutes. The video may be too complex to process or the server is busy.';
+                } else if (error.message.includes('network') || error.message.includes('fetch')) {
+                    errorMessage = 'Network error. Please check your connection and try again.';
+                } else if (error.message.includes('413') || error.message.includes('too large')) {
+                    errorMessage = 'The file is too large for the server to process. Please try a smaller file.';
+                }
+                
+                resultBox.innerHTML = `<p style="color: var(--error-color);">Error: ${errorMessage}</p>`;
+                showToast(errorMessage, 'error');
             } finally {
                 // Restore button
                 generateBtn.innerHTML = originalBtnText;
                 generateBtn.disabled = false;
+                
+                // Clear timeout if it exists
+                if (timeoutId) clearTimeout(timeoutId);
             }
+        }
+        
+        // Extract a frame from a video element
+        async function extractVideoFrame(videoElement) {
+            return new Promise((resolve, reject) => {
+                if (!videoElement || !(videoElement instanceof HTMLVideoElement)) {
+                    return reject(new Error('Invalid video element'));
+                }
+                
+                // Make sure video has loaded metadata
+                if (videoElement.readyState < 2) {
+                    videoElement.addEventListener('loadeddata', onVideoReady);
+                } else {
+                    extractFrame();
+                }
+                
+                function onVideoReady() {
+                    videoElement.removeEventListener('loadeddata', onVideoReady);
+                    extractFrame();
+                }
+                
+                function extractFrame() {
+                    try {
+                        // Create canvas and draw video frame
+                        const canvas = document.createElement('canvas');
+                        // Seek to 1 second or 10% of duration, whichever is less
+                        const seekTime = Math.min(1, videoElement.duration * 0.1);
+                        
+                        // Set video to the desired time
+                        videoElement.currentTime = seekTime;
+                        
+                        // Once we've seeked, draw the frame
+                        videoElement.addEventListener('seeked', function onSeeked() {
+                            videoElement.removeEventListener('seeked', onSeeked);
+                            
+                            // Set canvas dimensions to video dimensions
+                            canvas.width = videoElement.videoWidth;
+                            canvas.height = videoElement.videoHeight;
+                            
+                            // Draw video frame to canvas
+                            const ctx = canvas.getContext('2d');
+                            ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+                            
+                            // Convert canvas to base64
+                            try {
+                                const base64Data = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+                                resolve(base64Data);
+                            } catch (e) {
+                                reject(e);
+                            }
+                        });
+                    } catch (e) {
+                        reject(e);
+                    }
+                }
+            });
         }
         
         // Helper function to convert file to base64
         function fileToBase64(file) {
             return new Promise((resolve, reject) => {
+                // Update UI to show we're processing
+                if (file.size > 50 * 1024 * 1024) {
+                    resultBox.innerHTML = '<p style="color: orange;">Converting large file to base64. This may take a moment...</p>';
+                }
+                
                 const reader = new FileReader();
                 reader.readAsDataURL(file);
                 reader.onload = () => {
@@ -428,6 +539,16 @@
                     resolve(base64);
                 };
                 reader.onerror = error => reject(error);
+                
+                // Add progress event
+                reader.onprogress = (event) => {
+                    if (event.lengthComputable) {
+                        const percentLoaded = Math.round((event.loaded / event.total) * 100);
+                        if (file.size > 10 * 1024 * 1024) { // Only show progress for files > 10MB
+                            resultBox.innerHTML = `<p style="color: #666;">Preparing file: ${percentLoaded}% complete</p>`;
+                        }
+                    }
+                };
             });
         }
         
@@ -477,4 +598,4 @@
         }
     </script>
 </body>
-</html> 
+</html>
