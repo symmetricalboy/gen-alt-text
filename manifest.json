@@ -1,6 +1,6 @@
 {
-  "name": "AI Alt Text Generator | Symm",
-  "short_name": "Alt Text Gen",
+  "name": "Bluesky Alt Text Generator",
+  "short_name": "Alt Text",
   "description": "Automatically generate detailed, accessible alt text for your images & videos using Google Gemini AI.",
   "start_url": "/",
   "display": "standalone",
@@ -9,32 +9,32 @@
   "orientation": "any",
   "icons": [
     {
-      "src": "/public/icons/icon-16.png",
+      "src": "/public/icons/full-bleed-icon-16.png",
       "sizes": "16x16",
       "type": "image/png"
     },
     {
-      "src": "/public/icons/icon-32.png",
+      "src": "/public/icons/full-bleed-icon-32.png",
       "sizes": "32x32",
       "type": "image/png"
     },
     {
-      "src": "/public/icons/icon-48.png",
+      "src": "/public/icons/full-bleed-icon-48.png",
       "sizes": "48x48",
       "type": "image/png"
     },
     {
-      "src": "/public/icons/icon-96.png",
+      "src": "/public/icons/full-bleed-icon-96.png",
       "sizes": "96x96",
       "type": "image/png"
     },
     {
-      "src": "/public/icons/icon-128.png",
+      "src": "/public/icons/full-bleed-icon-128.png",
       "sizes": "128x128",
       "type": "image/png"
     },
     {
-      "src": "/public/icons/icon-128.png",
+      "src": "/public/icons/full-bleed-icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"

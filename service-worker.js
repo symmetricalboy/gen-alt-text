@@ -4,11 +4,12 @@ const urlsToCache = [
   '/index.html',
   '/offline.html',
   '/manifest.json',
-  '/public/icons/icon-16.png',
-  '/public/icons/icon-32.png',
-  '/public/icons/icon-48.png',
-  '/public/icons/icon-96.png',
-  '/public/icons/icon-128.png',
+  '/public/icons/full-bleed-icon-16.png',
+  '/public/icons/full-bleed-icon-32.png',
+  '/public/icons/full-bleed-icon-48.png',
+  '/public/icons/full-bleed-icon-96.png',
+  '/public/icons/full-bleed-icon-128.png',
+  '/public/icons/full-bleed-icon-512.png',
   '/public/icons/gen-alt-text.svg',
   '/public/icons/favicon.ico'
 ];
