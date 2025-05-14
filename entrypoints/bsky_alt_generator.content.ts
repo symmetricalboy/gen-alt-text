@@ -152,13 +152,18 @@ export default defineContentScript({
           console.log('[getMediaSource] Source is already a Data URL.');
           return src;
         } else if (src.startsWith('blob:')) {
-          console.log('[getMediaSource] Source is a Blob URL, converting to Data URL...');
+          console.log('[getMediaSource] Source is a Blob URL, processing...');
           try {
             const response = await fetch(src);
             const blob = await response.blob();
             
-            // For large videos, we'll still convert to data URL in the content script
-            // since document is available here, but not in the background script
+            // For large videos, extract a representative frame instead of processing the entire video
+            if (mediaElement instanceof HTMLVideoElement && blob.size > 5000000) { // 5MB threshold
+              console.log('[getMediaSource] Large video detected, extracting representative frame');
+              return extractVideoFrame(mediaElement);
+            }
+            
+            // Normal processing for smaller videos and images
             return new Promise((resolve, reject) => {
               const reader = new FileReader();
               reader.onloadend = () => resolve(reader.result as string);
@@ -193,6 +198,67 @@ export default defineContentScript({
         createToast('Error processing media. It might be protected or inaccessible.', 'error');
         return null;
       }
+    };
+    
+    // Function to extract a frame from a video element
+    const extractVideoFrame = (videoElement: HTMLVideoElement): Promise<string> => {
+      return new Promise((resolve, reject) => {
+        try {
+          // Create a canvas to capture the video frame
+          const canvas = document.createElement('canvas');
+          
+          // Set dimensions to match video
+          canvas.width = videoElement.videoWidth || videoElement.clientWidth;
+          canvas.height = videoElement.videoHeight || videoElement.clientHeight;
+          
+          // Get the canvas context
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            throw new Error('Could not get 2D context for video frame extraction');
+          }
+          
+          // Choose a representative frame (either current time or 20% into the video)
+          let seekTime = videoElement.currentTime;
+          if (seekTime === 0 && videoElement.duration) {
+            // If at the beginning, try to seek to a more representative frame
+            seekTime = Math.min(videoElement.duration * 0.2, 3); // 20% in or 3 seconds, whichever is less
+          }
+          
+          // For videos that aren't playing, we need to set the current time and wait for it to update
+          const handleSeek = () => {
+            // Draw the current video frame to the canvas
+            ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+            
+            // Get the data URL from the canvas (this is a JPEG frame from the video)
+            const frameDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+            
+            // Clean up event listeners if any were added
+            videoElement.removeEventListener('seeked', seekedHandler);
+            
+            // Return the frame data URL
+            console.log('[extractVideoFrame] Successfully extracted video frame');
+            resolve(frameDataUrl);
+          };
+          
+          // If we need to seek to a specific time
+          if (Math.abs(videoElement.currentTime - seekTime) > 0.1) {
+            // Define seeked handler
+            const seekedHandler = () => handleSeek();
+            
+            // Add event listener for when seeking is complete
+            videoElement.addEventListener('seeked', seekedHandler);
+            
+            // Start seeking
+            videoElement.currentTime = seekTime;
+          } else {
+            // Already at a good position, just capture the frame
+            handleSeek();
+          }
+        } catch (error) {
+          console.error('[extractVideoFrame] Error extracting video frame:', error);
+          reject(error);
+        }
+      });
     };
     
     // Function to add the generate button next to a textarea
@@ -345,7 +411,28 @@ export default defineContentScript({
             button.textContent = 'Generating...';
             button.style.color = '#000000';
 
+            // Add a timeout to handle potential hanging requests
+            const timeoutId = setTimeout(() => {
+              console.error('[generateAltText] Request timed out after 60 seconds');
+              try {
+                port.disconnect();
+              } catch (e) { /* ignore */ }
+              
+              button.textContent = 'Error: Timeout';
+              button.style.color = '#000000';
+              createToast('Request timed out. The media might be too large or complex to process.', 'error');
+              
+              setTimeout(() => {
+                button.innerHTML = originalButtonContent;
+                button.style.color = '';
+                button.disabled = false;
+              }, 3000);
+            }, 60000); // 60-second timeout
+
             port.onMessage.addListener((response: any) => {
+              // Clear the timeout since we got a response
+              clearTimeout(timeoutId);
+              
               console.log('[generateAltText] Msg from background:', response);
               let statusText = '';
               let isError = false;
@@ -416,7 +503,105 @@ export default defineContentScript({
             // Check for message length exceeded error
             if (error instanceof Error && error.message.includes('Message length exceeded maximum allowed length')) {
               errorMessage = 'Video Too Large';
-              createToast('The video is too large to process directly. Please try a shorter clip or a still image.', 'error');
+              createToast('Processing a representative frame of your video instead of the full video.', 'info');
+              
+              // Try again with frame extraction for large videos
+              try {
+                if (mediaElement instanceof HTMLVideoElement) {
+                  button.textContent = 'Extracting Frame...';
+                  const frameDataUrl = await extractVideoFrame(mediaElement);
+                  
+                  // Now try again with the frame
+                  button.textContent = 'Retrying...';
+                  const port = browser.runtime.connect({ name: "altTextGenerator" });
+                  
+                  // Set up listeners and timeout as before
+                  const timeoutId = setTimeout(() => {
+                    console.error('[generateAltText] Retry request timed out after 60 seconds');
+                    try {
+                      port.disconnect();
+                    } catch (e) { /* ignore */ }
+                    
+                    button.textContent = 'Error: Timeout';
+                    button.style.color = '#000000';
+                    createToast('Request timed out. Please try again later.', 'error');
+                    
+                    setTimeout(() => {
+                      button.innerHTML = originalButtonContent;
+                      button.style.color = '';
+                      button.disabled = false;
+                    }, 3000);
+                  }, 60000);
+
+                  port.onMessage.addListener((response: any) => {
+                    clearTimeout(timeoutId);
+                    console.log('[generateAltText] Retry msg from background:', response);
+                    let statusText = '';
+                    let isError = false;
+                    
+                    if (response.altText) {
+                      textarea.value = response.altText;
+                      textarea.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                      statusText = '✓ Done';
+                      // Add note about frame extraction
+                      createToast(
+                        'Alt text generated from a frame of your video! 🤖 Double-check it before posting.',
+                        'success', 
+                        8000 
+                      ); 
+                    } else if (response.error) {
+                      const errorMsg = typeof response.error === 'string' ? response.error : 'Unknown error';
+                      statusText = `Error: ${errorMsg.substring(0, 20)}...`;
+                      isError = true;
+                      createToast(`Error: ${errorMsg}`, 'error'); 
+                    } else {
+                      statusText = 'Msg Format Err';
+                      isError = true;
+                      console.error('[generateAltText] Unexpected message format:', response);
+                    }
+                    
+                    button.textContent = statusText;
+                    button.style.color = '#000000'; 
+                    setTimeout(() => {
+                      button.innerHTML = originalButtonContent;
+                      button.style.color = ''; 
+                      button.disabled = false;
+                    }, isError ? 3000 : 1500);
+                    
+                    try { port.disconnect(); } catch (e) { /* Ignore */ }
+                  });
+
+                  port.onDisconnect.addListener(() => {
+                    const lastError = browser.runtime.lastError;
+                    console.error('[generateAltText] Port disconnected during retry.', lastError || '(No error info)');
+                    if (button.textContent?.includes('Retrying') || button.textContent?.includes('Generating')) {
+                      button.textContent = 'Disconnect Err';
+                      button.style.color = '#000000'; 
+                      setTimeout(() => { 
+                        button.innerHTML = originalButtonContent; 
+                        button.style.color = ''; 
+                        button.disabled = false; 
+                      }, 3000);
+                    }
+                  });
+                  
+                  // Send the frame data instead of the full video
+                  port.postMessage({ 
+                    action: 'generateAltText', 
+                    mediaUrl: frameDataUrl, 
+                    isVideo: true,
+                    isLargeVideo: true,
+                    isFrameOnly: true // Add flag indicating this is just a frame
+                  });
+                  
+                  // Exit early since we're handling it
+                  return;
+                }
+              } catch (frameError) {
+                console.error('[generateAltText] Error during frame extraction fallback:', frameError);
+                errorMessage = 'Frame Extract Err';
+                createToast('Failed to process video. Please try a shorter clip or a still image.', 'error');
+              }
             }
             
             button.textContent = errorMessage;
