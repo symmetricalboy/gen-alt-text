@@ -189,7 +189,7 @@ export default defineBackground(() => {
             console.log('Very large request detected, using chunked transfer encoding if available');
           }
           
-          // Build the fetch options with appropriate headers
+          // Add mode: 'cors' explicitly to the fetch options
           const fetchOptions = {
               method: 'POST',
               headers: {
@@ -200,7 +200,8 @@ export default defineBackground(() => {
               },
               body: JSON.stringify(proxyRequestBody),
               signal: controller.signal,
-              // Force keeping the connection alive and use keep-alive for better large request handling
+              mode: 'cors', // Explicitly set CORS mode
+              credentials: 'omit', // Don't send cookies for cross-origin requests
               keepalive: true
           };
           
@@ -272,12 +273,56 @@ export default defineBackground(() => {
           clearTimeout(timeoutId);
           console.error('Fetch error details:', e);
           
+          // If it's a network error, try an alternative approach for images AND videos
+          if ((e.name === 'TypeError' && e.message.includes('Failed to fetch'))) {
+            console.log(`${isVideo ? 'Video' : 'Still image'} network error, trying alternate approach...`);
+            try {
+              // Try a simpler request format
+              const simpleRequestBody = {
+                base64Data: base64Data, // Essential
+                mimeType: mimeType,     // Essential
+                isVideo: isVideo,       // Essential
+                simpleMode: true,       // Flag for the server
+                fileName: proxyRequestBody.fileName, // Keep filename if available
+                // Omit fileSize or other potentially problematic fields for this simplified attempt
+              };
+              
+              console.log('Alternate approach body:', simpleRequestBody.mimeType, simpleRequestBody.isVideo, simpleRequestBody.simpleMode);
+              const simpleResponse = await fetch(CLOUD_FUNCTION_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(simpleRequestBody),
+                mode: 'cors' // Ensure CORS mode for the alternate request too
+              });
+              
+              if (!simpleResponse.ok) {
+                const errorText = await simpleResponse.text().catch(() => `Alternative request failed with status ${simpleResponse.status}`);
+                console.error('Alternative approach failed:', errorText);
+                // Fall through to the more generic error if this also fails, but provide specific feedback
+                return { error: `Network error after multiple attempts. Main: ${e.message}. Alt: ${errorText}` };
+              }
+              
+              const simpleData = await simpleResponse.json();
+              if (simpleData && typeof simpleData.altText === 'string') {
+                console.log('Successfully received alt text via alternate approach');
+                return { altText: simpleData.altText };
+              } else {
+                console.error('Alternate approach response format unexpected:', simpleData);
+                return { error: 'Network error: AI service connection failed (alt response invalid).' };
+              }
+            } catch (altError) {
+              console.error('Alternative approach also failed with exception:', altError);
+              return { error: `Network error: Unable to connect to the AI service after multiple attempts. Please check your connection. (Main: ${e.message}, Alt Exception: ${altError.message})` };
+            }
+          }
+          
+          // Original error handling if not a 'Failed to fetch' TypeError or if alternate fails and falls through
           if (e.name === 'AbortError') {
             return { error: 'Request timed out after several minutes. The media may be too complex to process.' };
           }
           if (e.message && e.message.includes('Failed to fetch')) {
             console.error('Network fetch error:', e);
-            return { error: 'Network error: Unable to connect to the AI service. Please check your connection or try again later.' };
+            return { error: 'Network error: Unable to connect to the AI service. Please check your connection and try again later.' };
           }
           if (e.message && e.message.includes('NetworkError')) {
             console.error('Network error:', e);
@@ -292,20 +337,19 @@ export default defineBackground(() => {
       }
   }
   
-  // --- Listener for Port Connections (from content script button click) ---
+  // Handle port connections from content scripts
   browser.runtime.onConnect.addListener((port) => {
     if (port.name === "altTextGenerator") {
-      port.onMessage.addListener(async (message: any) => {
-        // Handle large media direct upload flow
-        if (message && message.action === 'directUploadLargeMedia') {
+      port.onMessage.addListener(async (message) => {
+        if (message && message.action === "directUploadLargeMedia") {
           console.log(`Port request: Direct upload flow for large ${message.mediaType}, size: ${(message.fileSize / (1024 * 1024)).toFixed(2)}MB`);
           
           try {
-            // Generate a unique ID for this upload
+            // Create a unique upload ID for tracking
             const uploadId = `upload_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
             
-            // Get a temporary upload URL from the server
-            const uploadRequest = {
+            // Request for upload URL
+            const uploadUrlRequest = {
               action: 'getUploadUrl',
               mediaType: message.mediaType,
               mimeType: message.mimeType,
@@ -313,233 +357,207 @@ export default defineBackground(() => {
               uploadId: uploadId
             };
             
-            // Request a direct upload URL from the server
-            console.log('Requesting direct upload URL from proxy service...');
-            const uploadUrlResponse = await fetch(CLOUD_FUNCTION_URL, {
+            console.log("Requesting direct upload URL from proxy service...");
+            const response = await fetch(CLOUD_FUNCTION_URL, {
               method: 'POST',
               headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
               },
-              body: JSON.stringify(uploadRequest)
+              body: JSON.stringify(uploadUrlRequest)
             });
             
-            if (!uploadUrlResponse.ok) {
-              const errorMessage = await uploadUrlResponse.text().catch(() => null);
-              console.error('Failed to get upload URL:', uploadUrlResponse.status, errorMessage);
+            if (!response.ok) {
+              const responseText = await response.text().catch(() => null);
+              console.error("Failed to get upload URL:", response.status, responseText);
               
-              // Provide more specific error messages based on status code
-              if (uploadUrlResponse.status === 400) {
-                throw new Error(`Failed to get upload URL: 400 - File may exceed size limits or format not supported`);
-              } else if (uploadUrlResponse.status === 413) {
-                throw new Error(`Failed to get upload URL: 413 - File too large, please use a smaller video`);
+              if (response.status === 400) {
+                throw new Error('Failed to get upload URL: 400 - File may exceed size limits or format not supported');
+              } else if (response.status === 413) {
+                throw new Error('Failed to get upload URL: 413 - File too large, please use a smaller video');
               } else {
-                throw new Error(`Failed to get upload URL: ${uploadUrlResponse.status} ${errorMessage ? '- ' + errorMessage : ''}`);
+                throw new Error(`Failed to get upload URL: ${response.status} ${responseText ? '- ' + responseText : ''}`);
               }
             }
             
-            const uploadUrlData = await uploadUrlResponse.json();
-            
-            if (!uploadUrlData.uploadUrl) {
+            const data = await response.json();
+            if (!data.uploadUrl) {
               throw new Error('Server did not provide an upload URL');
             }
             
-            // Send the upload URL back to the content script
-            port.postMessage({
-              uploadUrl: uploadUrlData.uploadUrl,
-              uploadId: uploadId
-            });
-            
-            // Wait for confirmation that the upload is complete
-            return; // This listener will continue processing next messages
+            port.postMessage({ uploadUrl: data.uploadUrl, uploadId: uploadId });
+            return;
           } catch (error) {
-            console.error('Error setting up direct upload:', error);
-            port.postMessage({ 
-              error: `Error setting up direct upload: ${error.message}` 
-            });
+            console.error("Error setting up direct upload:", error);
+            port.postMessage({ error: `Error setting up direct upload: ${error.message}` });
           }
         } 
-        
-        // Handle notification that a direct upload is complete
-        else if (message && message.action === 'mediaUploadComplete') {
+        else if (message && message.action === "mediaUploadComplete") {
           console.log(`Media upload complete for ID: ${message.uploadId}`);
           
           try {
-            // Process the uploaded file with the proxy service
             const processRequest = {
               action: 'processUploadedMedia',
               uploadId: message.uploadId,
-              purpose: message.purpose || 'altText' // Add purpose parameter
+              purpose: message.purpose || 'altText'
             };
             
-            // Call the proxy function to process the uploaded media
-            const processResponse = await fetch(CLOUD_FUNCTION_URL, {
+            const response = await fetch(CLOUD_FUNCTION_URL, {
               method: 'POST',
               headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
               },
               body: JSON.stringify(processRequest)
             });
             
-            if (!processResponse.ok) {
-              throw new Error(`Failed to process uploaded media: ${processResponse.status}`);
+            if (!response.ok) {
+              const errorText = await response.text().catch(() => null);
+              throw new Error(`Failed to process uploaded media: ${response.status} ${errorText || ''}`);
             }
             
-            const processData = await processResponse.json();
-            
-            if (processData.altText) {
-              // Send the result back to the content script
-              port.postMessage({ altText: processData.altText });
+            const data = await response.json();
+            if (data.altText) {
+              port.postMessage({ altText: data.altText });
             } else {
               throw new Error('No alt text received from server');
             }
           } catch (error) {
-            console.error('Error processing uploaded media:', error);
-            port.postMessage({ 
-              error: `Error processing media: ${error.message}` 
-            });
+            console.error("Error processing uploaded media:", error);
+            port.postMessage({ error: `Error processing media: ${error.message}` });
           }
         }
-        
-        // Standard flow for direct media URL handling
-        else if (message && message.action === 'generateAltText' && typeof message.mediaUrl === 'string' && typeof message.isVideo === 'boolean') {
-          console.log(`Port request: Generate alt text for ${message.mediaUrl.substring(0,60)}..., isVideo: ${message.isVideo}`);
+        else if (message && message.action === "generateAltText" && typeof message.mediaUrl === "string" && typeof message.isVideo === "boolean") {
+          // Log the request details
+          console.log(`Port request: Generate alt text for ${message.mediaUrl.substring(0, 60)}..., isVideo: ${message.isVideo}`);
           
-          // Extract data about the file size if available
+          // For large videos (>1MB), print more information
           const fileSize = message.fileSize || message.mediaUrl.length;
-          const isLargeVideo = message.isVideo && fileSize > 1000000; // Over 1MB
+          const isLargeVideo = message.isVideo && fileSize > 1000000;
           
           if (isLargeVideo) {
             console.log(`Processing large video (estimated size: ${(fileSize / (1024 * 1024)).toFixed(2)}MB)`);
           }
           
-          // Call the proxy function
-          const result: PortResponse = await generateAltTextViaProxy(message.mediaUrl, message.isVideo, isLargeVideo);
-          
-          console.log('Sending result back via port:', result);
           try {
-            // Only post message if the port is still connected
-            if (port) { 
-                port.postMessage(result); // Send {altText: ...} or {error: ...}
+            // Generate alt text using the proxy service
+            const result = await generateAltTextViaProxy(message.mediaUrl, message.isVideo, isLargeVideo);
+            
+            // Log and send the result back via the port
+            console.log("Sending result back via port:", result);
+            
+            if (port) {
+              port.postMessage(result);
             } else {
-                 console.warn("Port disconnected before response could be sent.");
+              console.warn("Port disconnected before response could be sent.");
             }
-          } catch (postError: unknown) {
-            // Handle cases where the port might disconnect just before posting
-            console.error('Error posting message back via port (port might have disconnected):', postError);
+          } catch (error) {
+            console.error("Error generating alt text:", error);
+            
+            // Make sure to send the error back to the client
+            if (port) {
+              port.postMessage({ 
+                error: error instanceof Error 
+                  ? `Error: ${error.message}` 
+                  : "Unknown error occurred generating alt text" 
+              });
+            }
           }
         } else {
-          console.warn('Received unknown or invalid message format via port:', message);
+          console.warn("Received unknown or invalid message format via port:", message);
         }
       });
-
+      
       port.onDisconnect.addListener(() => {
-         console.log(`Port ${port.name} disconnected.`);
-         // No explicit cleanup needed here
+        console.log(`Port ${port.name} disconnected.`);
       });
     } else if (port.name === "captionGenerator") {
-      port.onMessage.addListener(async (message: any) => {
-        if (message && message.action === 'generateCaptions' && typeof message.mediaUrl === 'string') {
+      // Handler for caption generation requests
+      port.onMessage.addListener(async (message) => {
+        if (message && message.action === "generateCaptions" && typeof message.mediaUrl === "string") {
           console.log(`Port request: Generate captions for video, duration: ${message.duration}s`);
           
           try {
-            // Generate a unique ID for this transcription
+            // Create unique transcript ID
             const transcriptId = `transcript_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
             
             // Get the video data
             const { base64Data, mimeType } = await getBase64Data(message.mediaUrl);
             console.log(`Processed video for captioning, mime type: ${mimeType}, size: ${(base64Data.length / (1024 * 1024)).toFixed(2)}MB`);
             
-            // Check if file is too large
-            if (base64Data.length > 20 * 1024 * 1024) { // 20MB limit
-              console.error('Video too large for caption generation');
-              port.postMessage({ 
-                error: 'Video too large for captions (maximum 20MB). Please use a smaller video.'
-              });
+            // Check size limit
+            if (base64Data.length > 20 * 1024 * 1024) {
+              console.error("Video too large for caption generation");
+              port.postMessage({ error: "Video too large for captions (maximum 20MB). Please use a smaller video." });
               return;
             }
             
-            // Prepare the request payload
-            const transcriptionRequest = {
+            // Prepare request to generate captions
+            const captionRequest = {
               action: 'generateCaptions',
-              base64Data: base64Data,
-              mimeType: mimeType,
+              base64Data,
+              mimeType,
               duration: message.duration || 0,
-              transcriptId: transcriptId
+              transcriptId
             };
             
-            // Set timeout for the request
-            const timeoutDuration = 300000; // 5 minutes for transcription
+            // Set up timeout handling
+            const timeoutDuration = 300000; // 5 minutes
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), timeoutDuration);
             
             try {
-              // Call the proxy service
-              console.log('Requesting captions from proxy service...');
+              console.log("Requesting captions from proxy service...");
               const response = await fetch(CLOUD_FUNCTION_URL, {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(transcriptionRequest),
+                body: JSON.stringify(captionRequest),
                 signal: controller.signal
               });
               
               clearTimeout(timeoutId);
               
               if (!response.ok) {
-                console.error('Caption generation error:', response.status);
+                console.error("Caption generation error:", response.status);
                 
-                // Handle specific HTTP status codes
                 if (response.status === 403) {
-                  console.error('CORS issue detected: 403 Forbidden response from Cloud Function');
-                  port.postMessage({ 
-                    error: 'Access denied by the server. This is likely a CORS issue. The server needs to allow this extension to connect to it.'
-                  });
+                  console.error("CORS issue detected: 403 Forbidden response from Cloud Function");
+                  port.postMessage({ error: "Access denied by the server. This is likely a CORS issue. The server needs to allow this extension to connect to it." });
                   return;
                 }
                 
-                // For other errors, try to get more details
                 try {
                   const errorData = await response.json();
                   throw new Error(errorData.error || `Failed to generate captions: ${response.status} - ${response.statusText}`);
-                } catch (jsonError) {
+                } catch {
                   throw new Error(`Failed to generate captions: ${response.status} - ${response.statusText}`);
                 }
               }
               
-              const data = await response.json();
-              
-              if (data && data.vttContent) {
-                console.log('Successfully generated captions');
-                port.postMessage({ vttContent: data.vttContent });
+              const captionData = await response.json();
+              if (captionData && captionData.vttContent) {
+                console.log("Successfully generated captions");
+                port.postMessage({ vttContent: captionData.vttContent });
               } else {
-                throw new Error('No caption data received from server');
+                throw new Error("No caption data received from server");
               }
             } catch (fetchError) {
               clearTimeout(timeoutId);
-              console.error('Error calling caption service:', fetchError);
+              console.error("Error calling caption service:", fetchError);
               
               if (fetchError.name === 'AbortError') {
-                port.postMessage({ 
-                  error: 'Request timed out. The video may be too complex to process.'
-                });
+                port.postMessage({ error: "Request timed out. The video may be too complex to process." });
               } else {
-                port.postMessage({ 
-                  error: `Error generating captions: ${fetchError.message}`
-                });
+                port.postMessage({ error: `Error generating captions: ${fetchError.message}` });
               }
             }
-          } catch (error) {
-            console.error('Error processing caption request:', error);
-            port.postMessage({ 
-              error: `Error processing video: ${error.message}`
-            });
+          } catch (processingError) {
+            console.error("Error processing caption request:", processingError);
+            port.postMessage({ error: `Error processing video: ${processingError.message}` });
           }
         } else {
-          console.warn('Received unknown caption message format:', message);
-          port.postMessage({ 
-            error: 'Invalid caption request format'
-          });
+          console.warn("Received unknown caption message format:", message);
+          port.postMessage({ error: "Invalid caption request format" });
         }
       });
       

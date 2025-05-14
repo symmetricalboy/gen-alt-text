@@ -257,9 +257,9 @@
     </main>
     
     <footer>
-        <p>Also available as a <a href="https://github.com/symme-dev/gen-alt-text" target="_blank">browser extension</a>!</p>
+        <p>Also available as a <a href="https://github.com/symmetricalboy/gen-alt-text" target="_blank">browser extension</a>!</p>
         <p>Feedback, suggestions, assistance, & updates at <a href="https://bsky.app/profile/symm.app" target="_blank">@symm.app</a></p>
-        <p>Free & <a href="https://github.com/symme-dev/gen-alt-text" target="_blank">open source</a>, for all, forever.</p>
+        <p>Free & <a href="https://github.com/symmetricalboy/gen-alt-text" target="_blank">open source</a>, for all, forever.</p>
         <p>Copyright © 2025 Dylan Gregori Singer (symmetricalboy)</p>
     </footer>
     
@@ -328,9 +328,11 @@
         captionBtn.addEventListener('click', generateCaptions);
         
         // Function to update status message
-        function updateStatus(message, isVisible = true) {
-            statusBox.textContent = message;
-            statusBox.style.display = isVisible ? 'block' : 'none';
+        function updateStatus(message, isError = false) {
+            const statusElement = document.getElementById('status-message');
+            statusElement.textContent = message;
+            statusElement.style.color = isError ? 'var(--error-color)' : '#666';
+            statusElement.style.display = message ? 'block' : 'none';
         }
         
         // File handling
@@ -402,157 +404,105 @@
             captionBtn.style.display = file.type.startsWith('video/') ? 'block' : 'none';
         }
         
-        // Generate alt text
-        async function generateAltText() {
-            if (!currentFile) return;
+        // Send image to server for Alt Text generation
+        function generateAltText() {
+            // Get the selected file from the existing variable
+            if (!currentFile) {
+                updateStatus('Please select an image or video file first.', true);
+                return;
+            }
             
-            // Show loading state
+            // Clear previous results but show processing message
+            updateStatus('AI service is processing your media. This may take several minutes for large files...', true);
+            resultBox.innerHTML = '<p style="color: #666;">Processing your media...</p>';
+            copyBtn.disabled = true;
+            
+            // Show loading state for button
             const originalBtnText = generateBtn.innerHTML;
             generateBtn.innerHTML = '<span class="loading"></span>Generating...';
             generateBtn.disabled = true;
-            updateStatus('Processing... This may take longer for large files.');
             
-            // Set a timeout for the request - longer for large videos
-            const timeoutDuration = currentFile.size > 10 * 1024 * 1024 ? 300000 : 180000; // 5 minutes for large files, 3 minutes for smaller ones
-            let timeoutId;
-            
-            // Show processing timer for large videos
-            let processingTime = 0;
-            let processingTimer;
-            if (currentFile.size > 10 * 1024 * 1024) {
-                processingTimer = setInterval(() => {
-                    processingTime += 15;
-                    updateStatus(`Still processing... (${processingTime} seconds elapsed)`);
-                }, 15000); // Update every 15 seconds
-            }
-            
-            try {
-                // For large videos, show a warning
-                if (currentFile.type.startsWith('video/') && currentFile.size > 10 * 1024 * 1024) {
-                    updateStatus(`Processing large video (${(currentFile.size / (1024 * 1024)).toFixed(1)}MB). This may take several minutes...`);
-                } else if (currentFile.type.startsWith('video/')) {
-                    updateStatus('Processing video...');
-                } else {
-                    updateStatus('Processing image...');
-                }
-                
-                // Convert to base64
-                updateStatus('Preparing file: 0% complete');
-                const base64Data = await fileToBase64(currentFile);
-                const mimeType = currentFile.type;
-                
-                updateStatus('Preparing file: 100% complete');
-                
-                // Update status to show we're now sending to API
-                setTimeout(() => {
-                    updateStatus('Sending to AI service...');
-                }, 500);
-                
-                // Create an AbortController to handle timeout
-                const controller = new AbortController();
-                const signal = controller.signal;
-                
-                // Set timeout
-                timeoutId = setTimeout(() => {
-                    controller.abort();
-                }, timeoutDuration);
-                
-                // Update status to show the API is processing
-                setTimeout(() => {
-                    updateStatus('AI service is processing your media. This may take several minutes for large files...');
-                }, 3000);
-                
-                // Full video processing regardless of size
-                const requestBody = {
-                    base64Data,
-                    mimeType,
-                    fileName: currentFile.name,
-                    fileSize: currentFile.size
-                };
-                
-                // Add video metadata that might help the server
-                if (currentFile.type.startsWith('video/') && currentMediaElement && currentMediaElement instanceof HTMLVideoElement) {
-                    requestBody.videoDuration = currentMediaElement.duration || 0;
-                    requestBody.videoWidth = currentMediaElement.videoWidth || 0;
-                    requestBody.videoHeight = currentMediaElement.videoHeight || 0;
-                }
-                
-                console.log(`Sending ${(base64Data.length / (1024 * 1024)).toFixed(2)}MB of data to API...`);
-                
-                // Call the proxy function
-                console.log(`Sending ${(base64Data.length / (1024 * 1024)).toFixed(2)}MB of data to API...`);
-                
-                try {
-                    // For extremely large files, add more logging
-                    const startTime = Date.now();
+            // Convert file to base64
+            fileToBase64(currentFile)
+                .then(base64 => {
+                    // Prepare the request to the Cloud Function
+                    const requestData = {
+                        base64Data: base64,
+                        mimeType: currentFile.type,
+                        isVideo: currentFile.type.startsWith('video/'),
+                        fileName: currentFile.name,
+                        fileSize: currentFile.size
+                    };
                     
-                    const response = await fetch(CLOUD_FUNCTION_URL, {
+                    // Add video metadata if available
+                    if (currentFile.type.startsWith('video/') && currentMediaElement && currentMediaElement instanceof HTMLVideoElement) {
+                        requestData.videoDuration = currentMediaElement.duration || 0;
+                        requestData.videoWidth = currentMediaElement.videoWidth || 0;
+                        requestData.videoHeight = currentMediaElement.videoHeight || 0;
+                    }
+                    
+                    return fetch(CLOUD_FUNCTION_URL, {
                         method: 'POST',
                         headers: {
-                            'Content-Type': 'application/json'
+                            'Content-Type': 'application/json',
                         },
-                        body: JSON.stringify(requestBody),
-                        signal
+                        body: JSON.stringify(requestData)
                     });
-                    
-                    const requestDuration = ((Date.now() - startTime) / 1000).toFixed(1);
-                    console.log(`API request completed in ${requestDuration} seconds with status: ${response.status}`);
-                    
-                    // Clear timeout and timer since request completed
-                    clearTimeout(timeoutId);
-                    if (processingTimer) clearInterval(processingTimer);
-                    
-                    // Handle non-JSON responses
-                    const contentType = response.headers.get('content-type');
-                    if (!contentType || !contentType.includes('application/json')) {
-                        console.error('Received non-JSON response:', contentType);
-                        throw new Error(`Server returned non-JSON response: ${contentType}`);
-                    }
-                    
-                    const data = await response.json();
-                    console.log('Response data received:', data ? 'success' : 'empty');
-                    
+                })
+                .then(response => {
                     if (!response.ok) {
-                        throw new Error(data.error || `Error ${response.status}: ${response.statusText}`);
+                        throw new Error(`Server error: ${response.status} ${response.statusText}`);
                     }
-                    
+                    return response.json();
+                })
+                .then(data => {
                     if (data.altText) {
-                        resultBox.textContent = data.altText;
-                        updateStatus('', false); // Hide status message on success
+                        // Success - update the result and enable copy button
+                        updateResult(data.altText);
+                        updateStatus('Alt text generated successfully!', false);
                         copyBtn.disabled = false;
                         showToast('Alt text generated successfully!', 'success');
+                    } else if (data.error) {
+                        // Error from server
+                        updateStatus(`Error: ${data.error}`, true);
+                        updateResult('');
+                        showToast(data.error, 'error');
                     } else {
-                        throw new Error('No alt text received from the server');
+                        // Unexpected response
+                        updateStatus('Unexpected response from server', true);
+                        updateResult('');
+                        showToast('Unexpected response from server', 'error');
                     }
-                } catch (fetchError) {
-                    // Network or fetch-related errors
-                    console.error('Fetch error:', fetchError);
-                    throw fetchError;
-                }
-            } catch (error) {
-                console.error('Error generating alt text:', error);
-                
-                let errorMessage = error.message;
-                if (error.name === 'AbortError') {
-                    errorMessage = 'Request timed out after several minutes. The media may be too complex to process or the server is busy.';
-                } else if (error.message.includes('network') || error.message.includes('fetch')) {
-                    errorMessage = 'Network error. Please check your connection and try again.';
-                } else if (error.message.includes('413') || error.message.includes('too large')) {
-                    errorMessage = 'The file is too large for the server to process. Please try a smaller file.';
-                } else if (error.message.includes('SyntaxError') || error.message.includes('JSON')) {
-                    errorMessage = 'Received an invalid response from the server. The service might be experiencing issues.';
-                }
-                
-                updateStatus(`Error: ${errorMessage}`, true);
-                resultBox.innerHTML = `<p style="color: var(--error-color);">Error: ${errorMessage}</p>`;
-                showToast(errorMessage, 'error');
-            } finally {
-                // Restore button
-                generateBtn.innerHTML = originalBtnText;
-                generateBtn.disabled = false;
-                
-                // Clear timeout if it exists
-                if (timeoutId) clearTimeout(timeoutId);
+                })
+                .catch(error => {
+                    console.error('Error generating alt text:', error);
+                    
+                    let errorMessage = error.message;
+                    if (error.name === 'AbortError') {
+                        errorMessage = 'Request timed out after several minutes. The media may be too complex to process or the server is busy.';
+                    } else if (error.message.includes('network') || error.message.includes('fetch')) {
+                        errorMessage = 'Network error. Please check your connection and try again.';
+                    } else if (error.message.includes('413') || error.message.includes('too large')) {
+                        errorMessage = 'The file is too large for the server to process. Please try a smaller file.';
+                    }
+                    
+                    updateStatus(`Error: ${errorMessage}`, true);
+                    updateResult('');
+                    showToast(errorMessage, 'error');
+                })
+                .finally(() => {
+                    // Restore button state
+                    generateBtn.innerHTML = originalBtnText;
+                    generateBtn.disabled = false;
+                });
+        }
+        
+        // Helper function to update the result text area (ONLY for alt text, not status messages)
+        function updateResult(text) {
+            if (text && text.trim()) {
+                resultBox.innerHTML = `<p>${text.replace(/\n/g, '<br>')}</p>`;
+            } else {
+                resultBox.innerHTML = '<p style="color: #666;">No alt text generated.</p>';
             }
         }
         

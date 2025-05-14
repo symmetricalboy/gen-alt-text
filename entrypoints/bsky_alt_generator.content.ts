@@ -359,10 +359,10 @@ export default defineContentScript({
       button.id = BUTTON_ID;
       button.title = 'Generate Alt Text';
       
-      // Simplified button without icon
+      // Just use text, no icon
       button.textContent = 'Generate Alt Text';
       
-      // Update styling to match the captions button style
+      // Apply consistent styling
       Object.assign(button.style, {
           marginLeft: '8px',
           padding: '8px 16px', 
@@ -378,571 +378,172 @@ export default defineContentScript({
           color: 'white'
       });
 
-      const originalButtonContent = button.textContent;
+      // Store original style for quick reference
+      const originalText = button.textContent;
+      const originalBackgroundColor = button.style.backgroundColor;
+      const originalCursor = button.style.cursor;
+      // Add any other styles here if they are changed during processing
       
-      // Add a styled progress bar to the button
-      const createProgressContainer = () => {
-        const container = document.createElement('div');
-        Object.assign(container.style, {
-          position: 'relative',
-          width: '100%',
-          height: '4px',
-          backgroundColor: '#e0e0e0',
-          borderRadius: '2px',
-          overflow: 'hidden',
-          marginTop: '4px'
-        });
-        
-        const progressBar = document.createElement('div');
-        Object.assign(progressBar.style, {
-          position: 'absolute',
-          height: '100%',
-          width: '0%',
-          backgroundColor: '#208bfe',
-          transition: 'width 0.3s ease-in-out',
-          boxShadow: '0 0 3px rgba(32, 139, 254, 0.5)'
-        });
-        
-        container.appendChild(progressBar);
-        return { container, progressBar };
+      let isRunning = false; // Declare isRunning here
+
+      // Helper to find the alt text area (assuming it's the one passed to addGenerateButton)
+      const getAltTextArea = (): HTMLTextAreaElement => {
+        return textarea;
       };
 
-      // Modified generateAltText function to include progress indicators
-      const generateAltText = async () => {
-        // Create and append progress container
-        const { container: progressContainer, progressBar } = createProgressContainer();
-        
-        // Store original styling to restore later
-        const originalBackgroundColor = button.style.backgroundColor;
-        const originalColor = button.style.color;
-        const originalPadding = button.style.padding;
-        
-        // Prepare the button for processing state
-        button.textContent = '';
-        button.disabled = true;
-        
-        // Create a status message element
-        const statusMessage = document.createElement('div');
-        Object.assign(statusMessage.style, {
-          fontSize: '12px',
-          fontWeight: '500',
-          color: 'white',
-          textAlign: 'center',
-          width: '100%',
-          whiteSpace: 'nowrap'
-        });
-        statusMessage.textContent = 'Finding Media...';
-        
-        // Add status message to button
-        button.appendChild(statusMessage);
-        
-        // Ensure button has adequate width during processing
-        const originalWidth = button.offsetWidth;
-        const minWidth = Math.max(originalWidth, 100);
-        Object.assign(button.style, {
-          minWidth: `${minWidth}px`,
-          padding: '6px 8px',
-          backgroundColor: '#1a70c5'  // Slightly darker during processing
-        });
-        
-        // Add progress bar to bottom of button
-        buttonContainer.appendChild(progressContainer);
-        
-        // Update progress function
-        const updateProgress = (percent, message) => {
-          progressBar.style.width = `${percent}%`;
-          statusMessage.textContent = message;
-        };
-        
-        // Start with initial progress
-        updateProgress(5, 'Finding Media...');
-
+      // Helper function to generate and fill alt text
+      const generateAndFillAltText = async (targetTextArea: HTMLTextAreaElement) => {
         if (!mediaSearchContainer) {
-            console.error('[generateAltText] mediaSearchContainer is null! Cannot search for media.');
-            updateProgress(100, 'Error: Internal');
-            setTimeout(() => { 
-                button.textContent = originalButtonContent;
-                button.style.backgroundColor = originalBackgroundColor;
-                button.style.color = originalColor;
-                button.style.padding = originalPadding;
-                button.style.minWidth = '';
-                button.disabled = false;
-                buttonContainer.removeChild(progressContainer);
-            }, 3000);
+            console.error('[generateAndFillAltText] mediaSearchContainer is null! Cannot search for media.');
+            createToast('Error: Internal error finding media container.', 'error');
             return;
         }
         
-        updateProgress(10, 'Searching...');
-        console.log('[generateAltText] Searching for media within determined media search container:', mediaSearchContainer);
+        console.log('[generateAndFillAltText] Searching for media within determined media search container:', mediaSearchContainer);
         const mediaElement = findMediaElement(mediaSearchContainer);
         
-        console.log('[generateAltText] Media element found in search container:', mediaElement);
+        console.log('[generateAndFillAltText] Media element found in search container:', mediaElement);
 
         if (!mediaElement || !(mediaElement instanceof HTMLImageElement || mediaElement instanceof HTMLVideoElement)) {
-            console.error('[generateAltText] Could not find valid media element.');
-            updateProgress(100, 'Error: No Media');
-            setTimeout(() => { 
-                button.textContent = originalButtonContent;
-                button.style.backgroundColor = originalBackgroundColor;
-                button.style.color = originalColor;
-                button.style.padding = originalPadding;
-                button.style.minWidth = '';
-                button.disabled = false;
-                buttonContainer.removeChild(progressContainer);
-            }, 2000);
+            console.error('[generateAndFillAltText] Could not find valid media element.');
+            createToast('Error: No media found to generate alt text for.', 'error');
             return;
         }
 
         const isVideo = mediaElement.tagName === 'VIDEO';
-        updateProgress(20, isVideo ? 'Processing Video...' : 'Processing Image...');
-        button.style.color = '#000000'; 
         
-        // Check if this is a large video 
         let isLargeVideo = false;
-        
-        if (isVideo) {
+        if (isVideo && mediaElement instanceof HTMLVideoElement) {
           try {
-            // Estimate video size based on duration and dimensions
-            const duration = mediaElement instanceof HTMLVideoElement ? mediaElement.duration : 0;
+            const duration = mediaElement.duration || 0;
             const width = mediaElement.videoWidth || mediaElement.clientWidth;
             const height = mediaElement.videoHeight || mediaElement.clientHeight;
-            
-            // Heuristic to detect potentially large videos
-            if (duration > 15 || (width * height > 1000000 && duration > 5)) { // > 15s or (> 1MP and > 5s)
+            if (duration > 15 || (width * height > 1000000 && duration > 5)) {
               isLargeVideo = true;
-              console.log('[generateAltText] Large video detected, may take longer to process');
+              console.log('[generateAndFillAltText] Large video detected.');
               createToast('Processing large video. This may take several minutes...', 'info');
-              updateProgress(25, 'Processing Large Video...');
             }
           } catch (e) {
-            console.error('[generateAltText] Error checking video size:', e);
+            console.error('[generateAndFillAltText] Error checking video size:', e);
           }
         }
         
-        updateProgress(30, 'Reading Media...');
-        
-        // Get the media source URL
         const mediaSource = await getMediaSource(mediaElement); 
 
         if (!mediaSource) {
-          console.error('[generateAltText] Failed to get media source URL.');
-          updateProgress(100, 'Error: Media Access Failed');
+          console.error('[generateAndFillAltText] Failed to get media source URL.');
           createToast('Could not access media. Please try a different file.', 'error');
-          
-          setTimeout(() => { 
-            button.textContent = originalButtonContent;
-            button.style.backgroundColor = originalBackgroundColor;
-            button.style.color = originalColor;
-            button.style.padding = originalPadding;
-            button.style.minWidth = '';
-            button.disabled = false;
-            buttonContainer.removeChild(progressContainer);
-          }, 3000);
           return;
         }
         
-        console.log(`[generateAltText] Got ${isVideo ? 'Video' : 'Image'} source (type: ${mediaSource.substring(0, mediaSource.indexOf(':'))}, length: ${mediaSource.length})`);
+        console.log(`[generateAndFillAltText] Got ${isVideo ? 'Video' : 'Image'} source (type: ${mediaSource.substring(0, mediaSource.indexOf(':'))}, length: ${mediaSource.length})`);
 
-        // Helper function to process media with all needed error handling
-        const processWithMedia = async (mediaUrl: string, isVideoMedia: boolean, updateProgress, progressContainer) => {
-          try {
-            console.log('[processWithMedia] Connecting to background...');
-            updateProgress(50, 'Connecting...');
+        return new Promise<void>((resolve, reject) => {
             const port = browser.runtime.connect({ name: "altTextGenerator" });
-            console.log('[processWithMedia] Connection established.');
-            updateProgress(60, 'Preparing Media...');
-
-            // Add a timeout to handle potential hanging requests
+            
             const timeoutId = setTimeout(() => {
-              console.error('[processWithMedia] Request timed out after 300 seconds');
-              try {
-                port.disconnect();
-              } catch (e) { /* ignore */ }
-              
-              updateProgress(100, 'Error: Timeout');
+              console.error('[generateAndFillAltText] Request timed out after 300 seconds');
+              try { port.disconnect(); } catch (e) { /* ignore */ }
               createToast('Request timed out. The media might be too large or complex to process.', 'error');
-              
-              setTimeout(() => {
-                button.textContent = originalButtonContent;
-                button.style.backgroundColor = originalBackgroundColor;
-                button.style.color = originalColor;
-                button.style.padding = originalPadding;
-                button.style.minWidth = '';
-                button.disabled = false;
-                buttonContainer.removeChild(progressContainer);
-              }, 3000);
+              reject(new Error('Request timed out'));
             }, 300000); // 5-minute timeout
 
-            // For large files, we need to directly upload to server instead of using messaging
-            const isLargeFile = mediaUrl.length > 1000000; // Roughly 1MB in base64
-            
-            if (isVideoMedia && isLargeFile) {
-              const fileSizeMB = (mediaUrl.length / 1024 / 1024).toFixed(2);
-              console.log(`[processWithMedia] Media is large (${fileSizeMB}MB), using direct upload method`);
-              
-              // Add a size limit check (20MB is a reasonable limit for most cloud functions)
-              const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB in bytes
-              if (mediaUrl.length > MAX_FILE_SIZE) {
-                console.error(`[processWithMedia] File too large: ${fileSizeMB}MB exceeds limit of 20MB`);
-                updateProgress(100, 'File Too Large');
-                createToast('This video is too large to process (limit: 20MB). Please try a smaller or shorter video.', 'error');
-                
-                setTimeout(() => {
-                  button.textContent = originalButtonContent;
-                  button.style.backgroundColor = originalBackgroundColor;
-                  button.style.color = originalColor;
-                  button.style.padding = originalPadding;
-                  button.style.minWidth = '';
-                  button.disabled = false;
-                  buttonContainer.removeChild(progressContainer);
-                }, 3000);
-                
-                return;
-              }
-              
-              updateProgress(65, 'Processing Large Video...');
-              
-              // Extract basic information for the background script
-              const basicInfo = {
-                action: 'directUploadLargeMedia',
-                mediaType: isVideoMedia ? 'video' : 'image',
-                mimeType: mediaUrl.startsWith('data:') ? mediaUrl.split(';')[0].split(':')[1] : 'video/mp4',
-                fileSize: mediaUrl.length
-              };
-              
-              // Send only the metadata to the background script, not the full media
-              port.postMessage(basicInfo);
-              
-              // Show progress animation during generation
-              let progressVal = 65;
-              const progressInterval = setInterval(() => {
-                if (progressVal < 95) {
-                  progressVal += isVideoMedia ? 1 : 3; // Slower for videos
-                  updateProgress(progressVal, 'Generating...');
-                }
-              }, 1000);
-
-              port.onMessage.addListener(async (response: any) => {
-                // Handle the upload URL response
-                if (response.uploadUrl) {
-                  try {
-                    updateProgress(70, 'Uploading Media...');
-                    console.log('[processWithMedia] Received upload URL, sending media directly');
-                    
-                    // Extract the base64 data if this is a data URL
-                    let base64Data = mediaUrl;
-                    if (mediaUrl.startsWith('data:')) {
-                      base64Data = mediaUrl.split(',')[1];
-                    }
-                    
-                    // Convert base64 to blob for uploading
-                    const byteCharacters = atob(base64Data);
-                    const byteArrays = [];
-                    const sliceSize = 1024;
-                    
-                    for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
-                      const slice = byteCharacters.slice(offset, offset + sliceSize);
-                      const byteNumbers = new Array(slice.length);
-                      for (let i = 0; i < slice.length; i++) {
-                        byteNumbers[i] = slice.charCodeAt(i);
-                      }
-                      const byteArray = new Uint8Array(byteNumbers);
-                      byteArrays.push(byteArray);
-                    }
-                    
-                    const blob = new Blob(byteArrays, {type: basicInfo.mimeType});
-                    
-                    // Send the media directly to the upload URL
-                    const uploadResponse = await fetch(response.uploadUrl, {
-                      method: 'PUT',
-                      body: blob
-                    });
-                    
-                    if (uploadResponse.ok) {
-                      updateProgress(80, 'Media Uploaded');
-                      
-                      // Notify background that upload is complete
-                      port.postMessage({
-                        action: 'mediaUploadComplete',
-                        uploadId: response.uploadId,
-                        purpose: port.name === 'captionGenerator' ? 'captions' : 'altText'
-                      });
-                    } else {
-                      throw new Error(`Upload failed with status ${uploadResponse.status}`);
-                    }
-                  } catch (uploadError) {
-                    console.error('[processWithMedia] Upload error:', uploadError);
-                    clearInterval(progressInterval);
-                    clearTimeout(timeoutId);
-                    updateProgress(100, 'Upload Error');
-                    createToast(`Error uploading media: ${uploadError.message}`, 'error');
-                    
-                    setTimeout(() => {
-                      button.textContent = originalButtonContent;
-                      button.style.backgroundColor = originalBackgroundColor;
-                      button.style.color = originalColor;
-                      button.style.padding = originalPadding;
-                      button.style.minWidth = '';
-                      button.disabled = false;
-                      buttonContainer.removeChild(progressContainer);
-                    }, 3000);
-                    
-                    try { port.disconnect(); } catch (e) { /* Ignore */ }
-                  }
-                } else if (response.altText) {
-                  // Clear the interval and timeout
-                  clearInterval(progressInterval);
-                  clearTimeout(timeoutId);
-                  
-                  console.log('[processWithMedia] Msg from background:', response);
-                  
-                  updateProgress(100, '✓ Done');
-                  textarea.value = response.altText;
-                  textarea.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-                  
-                  // Always show toast now
-                  createToast(
-                    'Alt text generated! 🤖 Double-check it before posting, AI can make mistakes.',
-                    'success', 
-                    8000 
-                  );
-                  
-                  // Update status message
-                  if (!button.querySelector('div')) {
-                    // Create status message element if it doesn't exist
-                    const statusMessage = document.createElement('div');
-                    Object.assign(statusMessage.style, {
-                      fontSize: '12px',
-                      fontWeight: '500',
-                      textAlign: 'center',
-                      width: '100%',
-                      whiteSpace: 'nowrap',
-                      color: '#208bfe' // Success blue
-                    });
-                    button.textContent = '';
-                    button.appendChild(statusMessage);
-                  }
-                  
-                  const statusMessage = button.querySelector('div');
-                  statusMessage.textContent = '✓ Done';
-                  statusMessage.style.color = '#208bfe'; 
-                  setTimeout(() => {
-                      button.textContent = originalButtonContent;
-                      button.style.backgroundColor = originalBackgroundColor;
-                      button.style.color = originalColor;
-                      button.style.padding = originalPadding;
-                      button.style.minWidth = '';
-                      button.disabled = false;
-                      buttonContainer.removeChild(progressContainer);
-                  }, 1500);
-                  
-                  try { port.disconnect(); } catch (e) { /* Ignore */ }
-                } else if (response.error) {
-                  // Handle error response
-                  clearInterval(progressInterval);
-                  clearTimeout(timeoutId);
-                  
-                  const errorMsg = typeof response.error === 'string' ? response.error : 'Unknown error';
-                  updateProgress(100, `Error: ${errorMsg.substring(0, 20)}...`);
-                  createToast(`Error: ${errorMsg}`, 'error');
-                  
-                  // Update status message
-                  if (!button.querySelector('div')) {
-                    // Create status message element if it doesn't exist
-                    const statusMessage = document.createElement('div');
-                    Object.assign(statusMessage.style, {
-                      fontSize: '12px',
-                      fontWeight: '500',
-                      textAlign: 'center',
-                      width: '100%',
-                      whiteSpace: 'nowrap'
-                    });
-                    button.textContent = '';
-                    button.appendChild(statusMessage);
-                  }
-                  
-                  const statusMessage = button.querySelector('div');
-                  statusMessage.textContent = `Error: ${errorMsg.substring(0, 20)}...`;
-                  statusMessage.style.color = '#e74c3c'; // Error red 
-                  setTimeout(() => {
-                      button.textContent = originalButtonContent;
-                      button.style.backgroundColor = originalBackgroundColor;
-                      button.style.color = originalColor;
-                      button.style.padding = originalPadding;
-                      button.style.minWidth = '';
-                      button.disabled = false;
-                      buttonContainer.removeChild(progressContainer);
-                  }, 3000);
-                  
-                  try { port.disconnect(); } catch (e) { /* Ignore */ }
-                }
-              });
-              
-              port.onDisconnect.addListener(() => {
-                // Clear the interval
-                clearInterval(progressInterval);
-                
-                const lastError = browser.runtime.lastError;
-                console.error('[processWithMedia] Port disconnected.', lastError || '(No error info)');
-                const currentText = button.textContent;
-                if (currentText && !currentText.includes('Done') && !currentText.includes('Error')) {
-                  updateProgress(100, 'Disconnect Err');
-                  button.style.backgroundColor = originalBackgroundColor;
-                  button.style.color = originalColor;
-                  button.style.padding = originalPadding;
-                  button.style.minWidth = '';
-                  button.disabled = false;
-                  buttonContainer.removeChild(progressContainer);
-                }
-              });
-              
-              return; // Exit early, we're handling through the direct upload flow
-            }
-            
-            // Standard flow for smaller files
-            updateProgress(60, 'Generating...');
-            
-            // Show progress animation during generation
-            let progressVal = 60;
-            const progressInterval = setInterval(() => {
-              if (progressVal < 95) {
-                progressVal += isVideoMedia ? 1 : 3; // Slower for videos
-                updateProgress(progressVal, 'Generating...');
-              }
-            }, 1000);
-
             port.onMessage.addListener((response: any) => {
-              // Clear the interval and timeout
-              clearInterval(progressInterval);
               clearTimeout(timeoutId);
-              
-              console.log('[processWithMedia] Msg from background:', response);
-              let statusText = '';
-              let isError = false;
-              
+              console.log('[generateAndFillAltText] Msg from background:', response);
               if (response.altText) {
-                updateProgress(100, '✓ Done');
-                textarea.value = response.altText;
-                textarea.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-                statusText = '✓ Done';
-                // Always show toast now
-                createToast(
-                  'Alt text generated! 🤖 Double-check it before posting, AI can make mistakes.',
-                  'success', 
-                  8000 
-                );
+                targetTextArea.value = response.altText;
+                targetTextArea.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                createToast('Alt text generated! 🤖 Double-check it before posting, AI can make mistakes.', 'success', 8000);
+                resolve();
               } else if (response.error) {
                 const errorMsg = typeof response.error === 'string' ? response.error : 'Unknown error';
-                statusText = `Error: ${errorMsg.substring(0, 20)}...`;
-                updateProgress(100, statusText);
-                isError = true;
-                // Show error toast
-                createToast(`Error: ${errorMsg}`, 'error'); 
+                createToast(`Error: ${errorMsg}`, 'error');
+                reject(new Error(errorMsg));
               } else {
-                statusText = 'Msg Format Err';
-                updateProgress(100, statusText);
-                isError = true;
-                console.error('[processWithMedia] Unexpected message format:', response);
+                createToast('Unexpected message format from background script.', 'error');
+                reject(new Error('Unexpected message format'));
               }
-              
-              if (!button.querySelector('div')) {
-                // Create status message element if it doesn't exist
-                const statusMessage = document.createElement('div');
-                Object.assign(statusMessage.style, {
-                  fontSize: '12px',
-                  fontWeight: '500',
-                  textAlign: 'center',
-                  width: '100%',
-                  whiteSpace: 'nowrap'
-                });
-                button.textContent = '';
-                button.appendChild(statusMessage);
-              }
-              
-              // Update the status message
-              const statusMessage = button.querySelector('div');
-              statusMessage.textContent = statusText;
-              
-              // Set color based on status
-              if (isError) {
-                statusMessage.style.color = '#e74c3c'; // Error red
-              } else {
-                statusMessage.style.color = '#208bfe'; // Success blue
-              } 
-              setTimeout(() => {
-                  button.textContent = originalButtonContent;
-                  button.style.backgroundColor = originalBackgroundColor;
-                  button.style.color = originalColor;
-                  button.style.padding = originalPadding;
-                  button.style.minWidth = '';
-                  button.disabled = false;
-                  buttonContainer.removeChild(progressContainer);
-              }, isError ? 3000 : 1500);
-              
               try { port.disconnect(); } catch (e) { /* Ignore */ }
             });
 
             port.onDisconnect.addListener(() => {
-              // Clear the interval
-              clearInterval(progressInterval);
-              
+              clearTimeout(timeoutId);
               const lastError = browser.runtime.lastError;
-              console.error('[processWithMedia] Port disconnected.', lastError || '(No error info)');
-              const currentText = button.textContent;
-              if (currentText && !currentText.includes('Done') && !currentText.includes('Error')) {
-                updateProgress(100, 'Disconnect Err');
-                button.style.backgroundColor = originalBackgroundColor;
-                button.style.color = originalColor;
-                button.style.padding = originalPadding;
-                button.style.minWidth = '';
-                button.disabled = false;
-                buttonContainer.removeChild(progressContainer);
+              if (lastError) {
+                console.error('[generateAndFillAltText] Port disconnected with error:', lastError);
+                createToast(`Connection error: ${lastError.message || 'Unknown connection error'}`, 'error');
+                reject(new Error(lastError.message || 'Port disconnected'));
               }
             });
+            
+            // Check for large files and use direct upload if necessary
+            const isLargeFile = mediaSource.length > 1000000; // Roughly 1MB in base64
+            if (isVideo && isLargeFile) {
+                 // This section was complex and seems to be part of a previous approach.
+                 // For now, we'll simplify and send all media directly through the port.
+                 // If issues persist with large videos, this direct upload logic might need to be revisited.
+                 console.log('[generateAndFillAltText] Large video detected, sending through standard port message.');
+            }
 
-            // Send the message for smaller files
-            console.log('[processWithMedia] Sending message...');
+            console.log('[generateAndFillAltText] Sending message to background script...');
             port.postMessage({ 
               action: 'generateAltText', 
-              mediaUrl: mediaUrl, 
-              isVideo: isVideoMedia,
-              fileSize: mediaUrl.length // Estimate of file size for backend processing
+              mediaUrl: mediaSource, 
+              isVideo: isVideo,
+              fileSize: mediaSource.length 
             }); 
-            console.log('[processWithMedia] Message sent.');
-          } catch (error: unknown) {
-            console.error('[processWithMedia] Connect/Post error:', error);
-            let errorMessage = 'Connect Error';
-            
-            // Check for message length exceeded error
-            if (error instanceof Error && error.message.includes('Message length exceeded maximum allowed length')) {
-              errorMessage = 'Size Error';
-              updateProgress(100, errorMessage);
-              createToast('Media size exceeds maximum allowed by browser. Please try a smaller or lower resolution file.', 'error');
-            }
-            
-            button.textContent = errorMessage;
-            button.style.backgroundColor = originalBackgroundColor;
-            button.style.color = originalColor;
-            button.style.padding = originalPadding;
-            button.style.minWidth = '';
-            setTimeout(() => { 
-                button.textContent = originalButtonContent;
-                button.disabled = false;
-                buttonContainer.removeChild(progressContainer);
-            }, 3000);
-          }
-        };
-        
-        // Start processing with the media we found
-        await processWithMedia(mediaSource, isVideo, updateProgress, progressContainer);
+            console.log('[generateAndFillAltText] Message sent.');
+        });
       };
       
-      button.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        generateAltText();
+      // Add click event listener
+      button.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        // Early return if already running
+        if (isRunning) {
+          console.log("[GeminiAltText] Generation already in progress");
+          return;
+        }
+        
+        // Find the text area, skip if not found
+        const textArea = getAltTextArea();
+        if (!textArea) {
+          createToast('Could not find alt text field', 'error');
+          return;
+        }
+        
+        // Check if there's already content in the text area
+        if (textArea.value && textArea.value.trim().length > 0) {
+          if (!confirm('This will replace existing alt text. Continue?')) {
+            return;
+          }
+        }
+        
+        // Enter running state
+        isRunning = true;
+        
+        // Update button to show "Generating..."
+        button.textContent = 'Generating...';
+        button.style.backgroundColor = '#175da8';
+        button.style.cursor = 'wait';
+        
+        try {
+          await generateAndFillAltText(textArea);
+        } catch (error) {
+          createToast(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+          console.error('[GeminiAltText] Generation error:', error);
+        } finally {
+          // Reset button style and text
+          button.textContent = originalText;
+          button.style.backgroundColor = originalBackgroundColor;
+          button.style.cursor = originalCursor;
+          isRunning = false;
+        }
       });
-
+      
       // Add the button to its container
       buttonContainer.appendChild(button);
 
@@ -956,51 +557,54 @@ export default defineContentScript({
 
     // Find video caption section in dialog
     const findCaptionSection = (): HTMLElement | null => {
-      // Look for the captions section by trying multiple methods
+      // First find the dialog that contains captions section
+      const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).filter(
+        el => el.getAttribute('aria-label')?.includes('Video settings')
+      );
       
-      // Method 1: Try to find the Captions (.vtt) header directly
-      const captionHeaders = Array.from(document.querySelectorAll('div.css-146c3p1')).filter(
+      if (dialogs.length === 0) {
+        console.log('[findCaptionSection] Could not find Video settings dialog');
+        return null;
+      }
+      
+      const dialog = dialogs[0];
+      console.log('[findCaptionSection] Found Video settings dialog:', dialog);
+      
+      // Look for the "Captions (.vtt)" header within the dialog
+      const captionHeaders = Array.from(dialog.querySelectorAll('div[class*="css-"]')).filter(
         el => el.textContent?.includes('Captions (.vtt)')
       );
       
-      if (captionHeaders.length > 0) {
-        console.log('[findCaptionSection] Found Captions (.vtt) header:', captionHeaders[0]);
-        // Find the parent row containing the caption header
-        const captionSection = captionHeaders[0].closest('div[style*="gap"]');
-        if (captionSection) {
-          console.log('[findCaptionSection] Found caption section via Captions (.vtt) header:', captionSection);
-          return captionSection as HTMLElement;
+      if (captionHeaders.length === 0) {
+        console.log('[findCaptionSection] Could not find Captions (.vtt) header');
+        return null;
+      }
+      
+      // Get the section that contains the caption UI
+      // Typically this is the div that follows the header
+      const captionHeader = captionHeaders[0];
+      console.log('[findCaptionSection] Found Captions (.vtt) header:', captionHeader);
+      
+      // Find the parent container that wraps the captions section
+      // Look for parent with gap style - usually contains the upload button
+      let captionSection = captionHeader.parentElement;
+      
+      // Now find the next sibling section that actually contains the buttons
+      if (captionSection) {
+        // Try to find the direct container of the upload button
+        const captionControls = Array.from(captionSection.querySelectorAll('div[class*="css-"][style*="flex-direction: row"]')).filter(
+          el => el.querySelector('button[aria-label*="subtitle file"]')
+        );
+        
+        if (captionControls.length > 0) {
+          console.log('[findCaptionSection] Found caption controls container:', captionControls[0]);
+          return captionControls[0] as HTMLElement;
         }
       }
       
-      // Method 2: Look for the alt text & captions dialog and find the captions section
-      const altTextDialog = document.querySelector('div[aria-label="Video settings"][role="dialog"]');
-      if (altTextDialog) {
-        // Look for div containing the captions section
-        const sections = altTextDialog.querySelectorAll('div[style*="gap"]');
-        for (const section of sections) {
-          if (section.textContent?.includes('Captions') || 
-              section.textContent?.includes('.vtt')) {
-            console.log('[findCaptionSection] Found caption section via dialog:', section);
-            return section as HTMLElement;
-          }
-        }
-      }
-      
-      // Method 3: Look for the file input that accepts .vtt files
-      const vttInputs = document.querySelectorAll('input[type="file"][accept*=".vtt"]');
-      if (vttInputs.length > 0) {
-        const vttInput = vttInputs[0];
-        // Find the closest parent div with flex-direction row
-        const captionSection = vttInput.closest('div[style*="flex-direction: row"], div[style*="flex-direction:row"]');
-        if (captionSection) {
-          console.log('[findCaptionSection] Found caption section via .vtt input:', captionSection);
-          return captionSection as HTMLElement;
-        }
-      }
-      
-      console.log('[findCaptionSection] No caption section found');
-      return null;
+      console.log('[findCaptionSection] Could not find precise caption controls, using fallback');
+      // Fallback to returning the caption section itself
+      return captionSection as HTMLElement;
     };
     
     // Function to add the generate captions button
@@ -1025,9 +629,9 @@ export default defineContentScript({
       // If we couldn't find the button container, create a new one
       if (!buttonContainer) {
         buttonContainer = document.createElement('div');
-        buttonContainer.className = 'css-175oi2r';
-        buttonContainer.style.flexDirection = 'row';
-        buttonContainer.style.marginTop = '8px';
+        (buttonContainer as HTMLElement).className = 'css-175oi2r'; // Cast to HTMLElement
+        (buttonContainer as HTMLElement).style.flexDirection = 'row'; // Cast to HTMLElement
+        (buttonContainer as HTMLElement).style.marginTop = '8px'; // Cast to HTMLElement
         captionSection.appendChild(buttonContainer);
       }
       
@@ -1061,7 +665,12 @@ export default defineContentScript({
       button.addEventListener('click', generateCaptions);
       
       // Add button to the row
-      buttonContainer.appendChild(button);
+      // Ensure buttonContainer is treated as HTMLElement for style access if it was newly created
+      if (buttonContainer instanceof HTMLElement) {
+        buttonContainer.appendChild(button);
+      } else if (buttonContainer) { // If it was found by querySelector, it's already an Element
+        (buttonContainer as HTMLElement).appendChild(button); // Cast if necessary, though querySelector should return HTMLElement if found
+      }
       console.log('[addGenerateCaptionsButton] Added generate captions button');
     };
     
@@ -1163,9 +772,9 @@ export default defineContentScript({
           button.removeAttribute('disabled');
           button.style.opacity = '1';
         }
-      } catch (error) {
+      } catch (error: unknown) { // Specify unknown type for error
         console.error('[generateCaptions] Error:', error);
-        createToast(`Error generating captions: ${error.message}`, 'error');
+        createToast(`Error generating captions: ${(error instanceof Error ? error.message : String(error))}`, 'error'); // Safe access to message
         
         // Reset button state
         const button = document.getElementById(CAPTION_BUTTON_ID);
