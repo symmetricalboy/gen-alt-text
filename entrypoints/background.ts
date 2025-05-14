@@ -194,7 +194,6 @@ export default defineBackground(() => {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
-                'Connection': 'keep-alive',
                 'Accept': 'application/json',
                 'Cache-Control': 'no-cache'
               },
@@ -202,7 +201,7 @@ export default defineBackground(() => {
               signal: controller.signal,
               mode: 'cors', // Explicitly set CORS mode
               credentials: 'omit', // Don't send cookies for cross-origin requests
-              keepalive: true
+              keepalive: false // MODIFIED (or remove this line)
           };
           
           console.log(`Starting fetch request at ${new Date().toISOString()}`);

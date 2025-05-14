@@ -140,6 +140,9 @@ functions.http('generateAltTextProxy', async (req, res) => {
         }
     }
 
+    // !!! ADDED LOGGING HERE !!!
+    console.log(`[CORS DEBUG] Request Origin: ${requestOrigin}, Allowed: ${originAllowed}, AllowedOriginForCors: ${allowedOriginForCors}`);
+
     // --- Set CORS Headers ---
     // Only set Allow-Origin if the request origin is actually allowed
     if (allowedOriginForCors) {
@@ -152,7 +155,7 @@ functions.http('generateAltTextProxy', async (req, res) => {
     if (req.method === 'OPTIONS') {
         if (originAllowed) {
             res.set('Access-Control-Allow-Methods', 'POST');
-            res.set('Access-Control-Allow-Headers', 'Content-Type');
+            res.set('Access-Control-Allow-Headers', 'Content-Type, Connection, Accept, Cache-Control');
             res.set('Access-Control-Max-Age', '3600');
             res.status(204).send('');
         } else {
