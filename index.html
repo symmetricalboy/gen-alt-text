@@ -1,10 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Alt Text Generator | Symm</title>
-    <link rel="icon" href="public/icons/favicon.ico" type="image/x-icon">
+<!DOCTYPE html><html lang="en"><head>    <meta charset="UTF-8">    <meta name="viewport" content="width=device-width, initial-scale=1.0">    <title>AI Alt Text Generator | Symm</title>    <link rel="icon" href="public/icons/favicon.ico" type="image/x-icon">    <link rel="manifest" href="/manifest.json">    <meta name="theme-color" content="#208bfe">    <meta name="apple-mobile-web-app-capable" content="yes">    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">    <meta name="apple-mobile-web-app-title" content="Alt Text Gen">    <link rel="apple-touch-icon" href="/public/icons/icon-128.png">
     <style>
         :root {
             --primary-color: #208bfe;
@@ -482,8 +476,12 @@
                         errorMessage = 'Request timed out after several minutes. The media may be too complex to process or the server is busy.';
                     } else if (error.message.includes('network') || error.message.includes('fetch')) {
                         errorMessage = 'Network error. Please check your connection and try again.';
-                    } else if (error.message.includes('413') || error.message.includes('too large')) {
-                        errorMessage = 'The file is too large for the server to process. Please try a smaller file.';
+                    } else if (error.message.includes('413') || 
+                               error.message.toLowerCase().includes('too large') || 
+                               error.message.toLowerCase().includes('request entity too large') ||
+                               error.message.toLowerCase().includes('payload too large') ||
+                               error.message.toLowerCase().includes('message length exceeded')) {
+                        errorMessage = `Server error: File exceeds size limits (max ${MAX_FILE_SIZE / (1024 * 1024)}MB). Please use a smaller file.`;
                     }
                     
                     updateStatus(`Error: ${errorMessage}`, true);
@@ -589,7 +587,7 @@
                         downloadVTTFile(data.vttContent);
                         
                         updateStatus('', false);
-                        resultBox.innerHTML = '<p style="color: var(--primary-color);">Captions generated and downloaded!</p>';
+                        updateStatus('Captions generated and downloaded!', false);
                         showToast('Captions generated and downloaded!', 'success');
                     } else {
                         throw new Error('No caption data received from server');
@@ -600,6 +598,12 @@
                     let errorMessage = error.message;
                     if (error.name === 'AbortError') {
                         errorMessage = 'Caption generation timed out. The video may be too complex to process.';
+                    } else if (error.message.includes('413') ||
+                               error.message.toLowerCase().includes('too large') ||
+                               error.message.toLowerCase().includes('request entity too large') ||
+                               error.message.toLowerCase().includes('payload too large') ||
+                               error.message.toLowerCase().includes('message length exceeded')) {
+                        errorMessage = `Server error: File exceeds size limits (max ${MAX_FILE_SIZE / (1024 * 1024)}MB). Please use a smaller file.`;
                     }
                     
                     updateStatus(`Caption generation error: ${errorMessage}`, true);
@@ -771,6 +775,21 @@
                     }
                 }, 300);
             }, duration);
+        }
+    </script>
+    
+    <!-- Service Worker Registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/service-worker.js')
+                    .then(registration => {
+                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                    })
+                    .catch(error => {
+                        console.log('ServiceWorker registration failed: ', error);
+                    });
+            });
         }
     </script>
 </body>

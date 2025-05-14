@@ -221,7 +221,7 @@ export default defineBackground(() => {
               errorMsg = 'Access denied by the server. This is likely a CORS (Cross-Origin Resource Sharing) issue. The server needs to allow this extension to connect to it.';
               console.error('CORS issue detected: 403 Forbidden response from Cloud Function');
             } else if (proxyResponse.status === 413) {
-              errorMsg = 'The media is too large to be processed. Please use a smaller file.';
+              errorMsg = 'Server error: File exceeds size limits (max 20MB). Please use a smaller file.';
               console.error('Request entity too large (413) response from Cloud Function');
             } else if (proxyResponse.status === 0 || proxyResponse.status === 500 || proxyResponse.status === 502) {
               errorMsg = 'The server experienced an error processing your request. This could be due to the file size or server load.';
@@ -324,6 +324,14 @@ export default defineBackground(() => {
             console.error('Network fetch error:', e);
             return { error: 'Network error: Unable to connect to the AI service. Please check your connection and try again later.' };
           }
+          if (e.message && (e.message.includes('413') || 
+                           e.message.toLowerCase().includes('too large') || 
+                           e.message.toLowerCase().includes('request entity too large') ||
+                           e.message.toLowerCase().includes('payload too large') ||
+                           e.message.toLowerCase().includes('message length exceeded'))) {
+            console.error('Size limit error:', e);
+            return { error: `Server error: File exceeds size limits (max 20MB). Please use a smaller file.` };
+          }
           if (e.message && e.message.includes('NetworkError')) {
             console.error('Network error:', e);
             return { error: 'Network error: Connection interrupted. Please try again.' };
@@ -373,7 +381,7 @@ export default defineBackground(() => {
               if (response.status === 400) {
                 throw new Error('Failed to get upload URL: 400 - File may exceed size limits or format not supported');
               } else if (response.status === 413) {
-                throw new Error('Failed to get upload URL: 413 - File too large, please use a smaller video');
+                throw new Error('Server error: File exceeds size limits (max 20MB). Please use a smaller file.');
               } else {
                 throw new Error(`Failed to get upload URL: ${response.status} ${responseText ? '- ' + responseText : ''}`);
               }

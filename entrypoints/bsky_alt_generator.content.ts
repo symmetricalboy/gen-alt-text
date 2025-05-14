@@ -458,7 +458,19 @@ export default defineContentScript({
                 resolve();
               } else if (response.error) {
                 const errorMsg = typeof response.error === 'string' ? response.error : 'Unknown error';
-                createToast(`Error: ${errorMsg}`, 'error');
+                
+                // Check for size-related error messages and standardize them
+                if (errorMsg.toLowerCase().includes('too large') || 
+                    errorMsg.toLowerCase().includes('413') || 
+                    errorMsg.toLowerCase().includes('request entity too large') ||
+                    errorMsg.toLowerCase().includes('payload too large') ||
+                    errorMsg.toLowerCase().includes('message length exceeded') ||
+                    errorMsg.toLowerCase().includes('size limit')) {
+                  createToast('Server error: File exceeds size limits (max 20MB). Please use a smaller file.', 'error');
+                } else {
+                  createToast(`Error: ${errorMsg}`, 'error');
+                }
+                
                 reject(new Error(errorMsg));
               } else {
                 createToast('Unexpected message format from background script.', 'error');
@@ -570,8 +582,9 @@ export default defineContentScript({
       const dialog = dialogs[0];
       console.log('[findCaptionSection] Found Video settings dialog:', dialog);
       
-      // Look for the "Captions (.vtt)" header within the dialog
-      const captionHeaders = Array.from(dialog.querySelectorAll('div[class*="css-"]')).filter(
+      // Look for the "Captions (.vtt)" header within the dialog by text content
+      // Use all divs and filter by text content, not relying on class names
+      const captionHeaders = Array.from(dialog.querySelectorAll('div')).filter(
         el => el.textContent?.includes('Captions (.vtt)')
       );
       
@@ -586,13 +599,13 @@ export default defineContentScript({
       console.log('[findCaptionSection] Found Captions (.vtt) header:', captionHeader);
       
       // Find the parent container that wraps the captions section
-      // Look for parent with gap style - usually contains the upload button
       let captionSection = captionHeader.parentElement;
       
       // Now find the next sibling section that actually contains the buttons
       if (captionSection) {
-        // Try to find the direct container of the upload button
-        const captionControls = Array.from(captionSection.querySelectorAll('div[class*="css-"][style*="flex-direction: row"]')).filter(
+        // Try to find the container that contains the upload button by aria-label
+        // Look for any div that contains a button with "subtitle file" in its aria-label
+        const captionControls = Array.from(captionSection.querySelectorAll('div')).filter(
           el => el.querySelector('button[aria-label*="subtitle file"]')
         );
         
@@ -629,15 +642,31 @@ export default defineContentScript({
       // If we couldn't find the button container, create a new one
       if (!buttonContainer) {
         buttonContainer = document.createElement('div');
-        (buttonContainer as HTMLElement).className = 'css-175oi2r'; // Cast to HTMLElement
-        (buttonContainer as HTMLElement).style.flexDirection = 'row'; // Cast to HTMLElement
-        (buttonContainer as HTMLElement).style.marginTop = '8px'; // Cast to HTMLElement
+        
+        // Copy classes from parent container if possible to match Bluesky's styling
+        const parent = captionSection.parentElement;
+        if (parent && parent.firstElementChild) {
+          buttonContainer.className = parent.firstElementChild.className;
+        }
+        
+        // Set styles for proper layout
+        (buttonContainer as HTMLElement).style.flexDirection = 'row';
+        (buttonContainer as HTMLElement).style.display = 'flex';
+        (buttonContainer as HTMLElement).style.gap = '10px';
         captionSection.appendChild(buttonContainer);
+      } else {
+        // Ensure the existing container has proper styling for consistent layout
+        (buttonContainer as HTMLElement).style.display = 'flex';
+        (buttonContainer as HTMLElement).style.flexDirection = 'row';
+        (buttonContainer as HTMLElement).style.gap = '10px';
       }
       
       console.log('[addGenerateCaptionsButton] Using button container:', buttonContainer);
       
-      // Create our generate captions button, styled similarly to the Select file button
+      // Find the existing subtitle button to copy its style
+      const existingButton = captionSection.querySelector('button[aria-label*="subtitle file"]');
+      
+      // Create our generate captions button
       const button = document.createElement('button');
       button.id = CAPTION_BUTTON_ID;
       button.textContent = 'Generate Captions';
@@ -645,21 +674,50 @@ export default defineContentScript({
       button.setAttribute('role', 'button');
       button.setAttribute('tabindex', '0');
       
-      // Match Bluesky's button style
-      Object.assign(button.style, {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#208bfe',
-        padding: '13px 20px',
-        borderRadius: '8px',
-        gap: '8px',
-        color: 'white',
-        fontWeight: 'bold',
-        border: 'none',
-        cursor: 'pointer',
-        marginLeft: '10px'
-      });
+      // Copy attributes and styles from the existing button if possible
+      if (existingButton) {
+        // Copy classes without relying on specific class names
+        button.className = existingButton.className;
+        
+        // Copy computed styles to ensure identical appearance
+        const computedStyle = window.getComputedStyle(existingButton);
+        
+        // Apply the same styles but maintain our button's text
+        Object.assign(button.style, {
+          flexDirection: computedStyle.flexDirection,
+          alignItems: computedStyle.alignItems,
+          justifyContent: computedStyle.justifyContent,
+          backgroundColor: '#208bfe', // Keep our branded color
+          padding: computedStyle.padding,
+          borderRadius: computedStyle.borderRadius,
+          gap: computedStyle.gap,
+          color: computedStyle.color,
+          fontWeight: computedStyle.fontWeight,
+          border: computedStyle.border,
+          cursor: computedStyle.cursor,
+          marginLeft: '10px',
+          height: computedStyle.height,
+          fontFamily: computedStyle.fontFamily,
+          fontSize: computedStyle.fontSize,
+          lineHeight: computedStyle.lineHeight
+        });
+      } else {
+        // Fallback styling if we can't find the existing button
+        Object.assign(button.style, {
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: '#208bfe',
+          padding: '13px 20px',
+          borderRadius: '8px',
+          gap: '8px',
+          color: 'white',
+          fontWeight: 'bold',
+          border: 'none',
+          cursor: 'pointer',
+          marginLeft: '10px'
+        });
+      }
       
       // Add click handler
       button.addEventListener('click', generateCaptions);
@@ -735,7 +793,21 @@ export default defineContentScript({
           
           if (response.error) {
             console.error('[generateCaptions] Error from background script:', response.error);
-            createToast(`Error: ${response.error}`, 'error');
+            
+            const errorMsg = response.error;
+            // Check for size-related error messages and standardize them
+            if (typeof errorMsg === 'string' && (
+                errorMsg.toLowerCase().includes('too large') || 
+                errorMsg.toLowerCase().includes('413') || 
+                errorMsg.toLowerCase().includes('request entity too large') ||
+                errorMsg.toLowerCase().includes('payload too large') ||
+                errorMsg.toLowerCase().includes('message length exceeded') ||
+                errorMsg.toLowerCase().includes('size limit'))) {
+              createToast('Server error: File exceeds size limits (max 20MB). Please use a smaller file.', 'error');
+            } else {
+              createToast(`Error: ${errorMsg}`, 'error');
+            }
+            
             resetButton();
             return;
           }

@@ -13,8 +13,11 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div class="info-section">
       <h2>How it Works</h2>
       <p>
-        This extension automatically adds a ✨ button next to alt text input fields on bsky.app. 
+        This extension automatically adds a "generate alt text" button next to alt text input fields on bsky.app. 
         Click the button to generate alt text for the associated image or video.
+      </p>
+      <p>
+        You can also generate captions for your posts using the same functionality.
       </p>
        <p>
         Remember to always review the generated text before posting!
@@ -22,6 +25,9 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     </div>
     
     <div class="footer">
+      <p>
+        Also available as a <a href="https://alttext.symm.app" target="_blank" rel="noopener noreferrer">web app</a>!
+      </p>
       <p>
         Feedback, suggestions, assistance, & updates at 
         <a href="https://bsky.app/profile/symm.app" target="_blank" rel="noopener noreferrer">@symm.app</a>
