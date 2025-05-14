@@ -9,6 +9,21 @@ const fetch = require('node-fetch'); // Use node-fetch or native fetch in newer 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // Will be set during deployment
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
+// --- Instructions for caption generation ---
+const captionSystemInstructions = `You are an expert captioning service. Your task is to provide accurate captions for a video by transcribing its audio content. The captions should be properly formatted as WebVTT subtitles with timestamps.
+
+Guidelines for your task:
+
+1. Transcribe all spoken words and important audio elements.
+2. Use appropriate WebVTT formatting.
+3. Add timestamps that make sense for a video of the provided duration.
+4. Keep each caption segment to a reasonable length (1-2 sentences maximum).
+5. Include speaker identification when multiple people are speaking.
+6. Include important sound effects or music in [brackets].
+7. Ensure each caption segment has a reasonable duration (approximately 2-5 seconds).
+
+Based on the video provided, please generate a complete WebVTT file that begins with "WEBVTT" and includes properly formatted captions with timestamps in the format HH:MM:SS.mmm --> HH:MM:SS.mmm.`;
+
 // --- !!! REPLACE WITH YOUR ACTUAL IDs !!! ---
 const ALLOWED_CHROME_ORIGIN = 'chrome-extension://bdgpkmjnfildfjhpjagjibfnfpdieddp';
 // Find this when you package your Safari extension via Xcode (e.g., com.yourcompany.yourextension)
@@ -201,6 +216,151 @@ functions.http('generateAltTextProxy', async (req, res) => {
             
             console.log(`Successfully condensed text from ${req.body.text.length} to ${condensedText.length} characters`);
             return res.status(200).json({ altText: condensedText.trim() });
+        }
+        
+        // Check if this is a caption generation request
+        if (req.body.action === 'generateCaptions') {
+            const { base64Data, mimeType, duration, transcriptId } = req.body;
+            
+            if (!base64Data || !mimeType) {
+                return res.status(400).json({ error: 'Missing required fields: base64Data and mimeType' });
+            }
+            
+            if (!mimeType.startsWith('video/')) {
+                return res.status(400).json({ error: 'Invalid mime type for caption generation. Expected video/*' });
+            }
+            
+            console.log(`Processing caption generation request for ${mimeType}, data length: ${base64Data.length}, duration: ${duration || 'unknown'}, ID: ${transcriptId}`);
+            
+            // Prepare the caption request
+            const videoDuration = duration || 60; // Default to 60 seconds if no duration provided
+            
+            // Add the duration to the instructions
+            const instructionsWithDuration = `${captionSystemInstructions}\n\nThis video is approximately ${videoDuration} seconds long. Please create appropriate captions with timestamps that cover this duration.`;
+            
+            // Call Gemini API for caption generation
+            const captionRequestBody = {
+                contents: [{
+                    parts: [
+                        { text: instructionsWithDuration },
+                        { inline_data: { mime_type: mimeType, data: base64Data } }
+                    ]
+                }],
+                generationConfig: {
+                    temperature: 0.2,
+                    maxOutputTokens: 4096, // Higher token limit for longer caption text
+                    topP: 0.95,
+                    topK: 40
+                }
+            };
+            
+            try {
+                console.log('Calling Gemini API for caption generation...');
+                const geminiResponse = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(captionRequestBody)
+                });
+                
+                const geminiData = await geminiResponse.json();
+                
+                if (!geminiResponse.ok) {
+                    console.error('Gemini API Error in caption generation:', JSON.stringify(geminiData));
+                    const errorMsg = geminiData?.error?.message || `Gemini API failed with status ${geminiResponse.status}`;
+                    return res.status(geminiResponse.status >= 500 ? 502 : 400).json({ error: `Gemini API Error: ${errorMsg}` });
+                }
+                
+                // Extract the generated captions
+                const generatedCaptions = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
+                
+                if (!generatedCaptions) {
+                    console.error('Could not extract captions from Gemini response:', JSON.stringify(geminiData));
+                    return res.status(500).json({ error: 'Failed to parse caption response from AI service' });
+                }
+                
+                // Ensure we have a properly formatted WebVTT file
+                let vttContent = generatedCaptions.trim();
+                
+                // Add WEBVTT header if not present
+                if (!vttContent.startsWith('WEBVTT')) {
+                    vttContent = `WEBVTT\n\n${vttContent}`;
+                }
+                
+                console.log('Successfully generated captions.');
+                return res.status(200).json({ vttContent: vttContent });
+                
+            } catch (error) {
+                console.error('Error generating captions:', error);
+                return res.status(500).json({ error: `Caption generation failed: ${error.message}` });
+            }
+        }
+        
+        if (req.body.action === 'getUploadUrl') {
+            // Handle generating a signed upload URL
+            const { mediaType, mimeType, fileSize, uploadId } = req.body;
+            
+            if (!mediaType || !mimeType || !fileSize || !uploadId) {
+                return res.status(400).json({ error: 'Missing required fields for upload URL generation' });
+            }
+            
+            // Check if file size is too large (20MB limit)
+            const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+            if (fileSize > MAX_FILE_SIZE) {
+                return res.status(413).json({ error: 'File too large. Maximum size is 20MB.' });
+            }
+            
+            // For demo purposes, instead of actually generating a signed URL, we'll just return 
+            // a simple URL with a dummy querystring that we'll recognize later.
+            // In a real implementation, you'd use proper cloud storage signed URLs.
+            console.log(`Generating upload URL for ${mediaType}, type ${mimeType}, size ${fileSize}, ID ${uploadId}`);
+            
+            // In a real implementation, you would generate a signed URL and store the uploadId
+            // in some database or in-memory for later retrieval
+            const uploadUrl = `https://example.com/upload-endpoint?id=${uploadId}`; // Placeholder
+            
+            return res.status(200).json({ 
+                uploadUrl: uploadUrl,
+                uploadId: uploadId 
+            });
+        }
+        
+        if (req.body.action === 'processUploadedMedia') {
+            // Handle processing media that was uploaded directly
+            const { uploadId, purpose } = req.body;
+            const processPurpose = purpose || 'altText'; // Default to alt text if not specified
+            
+            if (!uploadId) {
+                return res.status(400).json({ error: 'Missing required field: uploadId' });
+            }
+            
+            // In a real implementation, you would retrieve the uploaded file using the uploadId
+            // For this demo, we'll simulate processing with some placeholder content
+            console.log(`Processing uploaded media with ID ${uploadId} for purpose: ${processPurpose}`);
+            
+            // Simulate processing delay
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            if (processPurpose === 'captions') {
+                // Return dummy captions for demo purposes
+                // In a real implementation, you would process the actual uploaded file
+                const dummyVtt = `WEBVTT
+
+00:00:00.000 --> 00:00:05.000
+[Music Playing]
+
+00:00:05.000 --> 00:00:10.000
+Hello, this is a sample caption for demonstration purposes.
+
+00:00:10.000 --> 00:00:15.000
+In a real implementation, we would analyze the actual video.`;
+
+                return res.status(200).json({ vttContent: dummyVtt });
+            } else {
+                // Default to alt text
+                return res.status(200).json({ 
+                    altText: "This is a placeholder alt text for the uploaded media. In a real implementation, we would analyze the actual media that was uploaded." 
+                });
+            }
         }
         
         // Regular image/video alt text generation

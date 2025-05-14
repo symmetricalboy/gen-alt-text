@@ -274,7 +274,17 @@ export default defineBackground(() => {
             });
             
             if (!uploadUrlResponse.ok) {
-              throw new Error(`Failed to get upload URL: ${uploadUrlResponse.status}`);
+              const errorMessage = await uploadUrlResponse.text().catch(() => null);
+              console.error('Failed to get upload URL:', uploadUrlResponse.status, errorMessage);
+              
+              // Provide more specific error messages based on status code
+              if (uploadUrlResponse.status === 400) {
+                throw new Error(`Failed to get upload URL: 400 - File may exceed size limits or format not supported`);
+              } else if (uploadUrlResponse.status === 413) {
+                throw new Error(`Failed to get upload URL: 413 - File too large, please use a smaller video`);
+              } else {
+                throw new Error(`Failed to get upload URL: ${uploadUrlResponse.status} ${errorMessage ? '- ' + errorMessage : ''}`);
+              }
             }
             
             const uploadUrlData = await uploadUrlResponse.json();
@@ -307,7 +317,8 @@ export default defineBackground(() => {
             // Process the uploaded file with the proxy service
             const processRequest = {
               action: 'processUploadedMedia',
-              uploadId: message.uploadId
+              uploadId: message.uploadId,
+              purpose: message.purpose || 'altText' // Add purpose parameter
             };
             
             // Call the proxy function to process the uploaded media
@@ -375,8 +386,103 @@ export default defineBackground(() => {
          console.log(`Port ${port.name} disconnected.`);
          // No explicit cleanup needed here
       });
+    } else if (port.name === "captionGenerator") {
+      port.onMessage.addListener(async (message: any) => {
+        if (message && message.action === 'generateCaptions' && typeof message.mediaUrl === 'string') {
+          console.log(`Port request: Generate captions for video, duration: ${message.duration}s`);
+          
+          try {
+            // Generate a unique ID for this transcription
+            const transcriptId = `transcript_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+            
+            // Get the video data
+            const { base64Data, mimeType } = await getBase64Data(message.mediaUrl);
+            console.log(`Processed video for captioning, mime type: ${mimeType}, size: ${(base64Data.length / (1024 * 1024)).toFixed(2)}MB`);
+            
+            // Check if file is too large
+            if (base64Data.length > 20 * 1024 * 1024) { // 20MB limit
+              console.error('Video too large for caption generation');
+              port.postMessage({ 
+                error: 'Video too large for captions (maximum 20MB). Please use a smaller video.'
+              });
+              return;
+            }
+            
+            // Prepare the request payload
+            const transcriptionRequest = {
+              action: 'generateCaptions',
+              base64Data: base64Data,
+              mimeType: mimeType,
+              duration: message.duration || 0,
+              transcriptId: transcriptId
+            };
+            
+            // Set timeout for the request
+            const timeoutDuration = 300000; // 5 minutes for transcription
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeoutDuration);
+            
+            try {
+              // Call the proxy service
+              console.log('Requesting captions from proxy service...');
+              const response = await fetch(CLOUD_FUNCTION_URL, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(transcriptionRequest),
+                signal: controller.signal
+              });
+              
+              clearTimeout(timeoutId);
+              
+              if (!response.ok) {
+                console.error('Caption generation error:', response.status);
+                const errorText = await response.text();
+                throw new Error(`Failed to generate captions: ${response.status} - ${errorText}`);
+              }
+              
+              const data = await response.json();
+              
+              if (data && data.vttContent) {
+                console.log('Successfully generated captions');
+                port.postMessage({ vttContent: data.vttContent });
+              } else {
+                throw new Error('No caption data received from server');
+              }
+            } catch (fetchError) {
+              clearTimeout(timeoutId);
+              console.error('Error calling caption service:', fetchError);
+              
+              if (fetchError.name === 'AbortError') {
+                port.postMessage({ 
+                  error: 'Request timed out. The video may be too complex to process.'
+                });
+              } else {
+                port.postMessage({ 
+                  error: `Error generating captions: ${fetchError.message}`
+                });
+              }
+            }
+          } catch (error) {
+            console.error('Error processing caption request:', error);
+            port.postMessage({ 
+              error: `Error processing video: ${error.message}`
+            });
+          }
+        } else {
+          console.warn('Received unknown caption message format:', message);
+          port.postMessage({ 
+            error: 'Invalid caption request format'
+          });
+        }
+      });
+      
+      port.onDisconnect.addListener(() => {
+        console.log(`Port ${port.name} disconnected.`);
+      });
     } else {
-        console.warn(`Unexpected port connection ignored: ${port.name}`);
+      console.warn(`Unexpected port connection ignored: ${port.name}`);
     }
   });
   

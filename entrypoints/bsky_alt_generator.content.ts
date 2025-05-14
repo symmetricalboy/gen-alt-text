@@ -18,6 +18,7 @@ export default defineContentScript({
     ];
     const ALT_TEXT_SELECTOR = ALT_TEXT_SELECTORS.join(',');
     const BUTTON_ID = 'gemini-alt-text-button';
+    const CAPTION_BUTTON_ID = 'gemini-caption-button';
     
     // Toast notification system
     const createToast = (message: string, type: 'info' | 'success' | 'error' | 'warning' = 'info', duration: number = 8000) => {
@@ -345,7 +346,7 @@ export default defineContentScript({
       Object.assign(button.style, {
           marginLeft: '8px', padding: '6px 10px', cursor: 'pointer', border: '1px solid #ccc',
           borderRadius: '4px', backgroundColor: '#f0f0f0', display: 'flex', alignItems: 'center',
-          justifyContent: 'center', fontSize: '12px', fontWeight: '500'
+          justifyContent: 'center', fontSize: '12px', fontWeight: '500', color: '#000000'
       });
 
       const originalButtonContent = button.innerHTML; 
@@ -558,7 +559,30 @@ export default defineContentScript({
             const isLargeFile = mediaUrl.length > 1000000; // Roughly 1MB in base64
             
             if (isVideoMedia && isLargeFile) {
-              console.log(`[processWithMedia] Media is large (${(mediaUrl.length / 1024 / 1024).toFixed(2)}MB), using direct upload method`);
+              const fileSizeMB = (mediaUrl.length / 1024 / 1024).toFixed(2);
+              console.log(`[processWithMedia] Media is large (${fileSizeMB}MB), using direct upload method`);
+              
+              // Add a size limit check (20MB is a reasonable limit for most cloud functions)
+              const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB in bytes
+              if (mediaUrl.length > MAX_FILE_SIZE) {
+                console.error(`[processWithMedia] File too large: ${fileSizeMB}MB exceeds limit of 20MB`);
+                updateProgress(100, 'File Too Large');
+                createToast('This video is too large to process (limit: 20MB). Please try a smaller or shorter video.', 'error');
+                
+                setTimeout(() => {
+                  button.innerHTML = originalButtonContent;
+                  Object.assign(button.style, {
+                    minWidth: '',
+                    padding: '4px',
+                    backgroundColor: '#f0f0f0'
+                  });
+                  button.disabled = false;
+                  buttonContainer.removeChild(progressContainer);
+                }, 3000);
+                
+                return;
+              }
+              
               updateProgress(65, 'Processing Large Video...');
               
               // Extract basic information for the background script
@@ -623,7 +647,8 @@ export default defineContentScript({
                       // Notify background that upload is complete
                       port.postMessage({
                         action: 'mediaUploadComplete',
-                        uploadId: response.uploadId
+                        uploadId: response.uploadId,
+                        purpose: port.name === 'captionGenerator' ? 'captions' : 'altText'
                       });
                     } else {
                       throw new Error(`Upload failed with status ${uploadResponse.status}`);
@@ -920,13 +945,200 @@ export default defineContentScript({
       console.log('[addGenerateButton] Button added successfully after textarea parent:', buttonAttachPoint);
     }
 
-    // --- Simplified Manual Mode Observer ---
-    let manualModeObserver: MutationObserver | null = null;
+    // Find video caption section in dialog
+    const findCaptionSection = (): HTMLElement | null => {
+      // Look for the captions section header
+      const captionHeaders = Array.from(document.querySelectorAll('div.css-146c3p1')).filter(
+        el => el.textContent?.includes('Captions') || el.textContent?.includes('.vtt')
+      );
+      
+      if (captionHeaders.length === 0) return null;
+      
+      // Get the parent container of the caption section
+      const captionHeader = captionHeaders[0];
+      const captionSection = captionHeader.closest('div.css-175oi2r');
+      
+      console.log('[findCaptionSection] Found caption section:', captionSection);
+      return captionSection as HTMLElement;
+    };
+    
+    // Function to add the generate captions button
+    const addGenerateCaptionsButton = () => {
+      // Find the captions section in the dialog
+      const captionSection = findCaptionSection();
+      if (!captionSection) return;
+      
+      // Check if our button already exists
+      if (captionSection.querySelector(`#${CAPTION_BUTTON_ID}`)) return;
+      
+      // Find the button row in the captions section
+      const buttonRow = captionSection.querySelector('div.css-175oi2r[style*="flex-direction: row"]');
+      if (!buttonRow) return;
+      
+      // Create our generate captions button, styled similarly to the Select file button
+      const button = document.createElement('button');
+      button.id = CAPTION_BUTTON_ID;
+      button.textContent = 'Generate Captions';
+      button.setAttribute('aria-label', 'Generate captions using AI');
+      button.setAttribute('role', 'button');
+      button.setAttribute('tabindex', '0');
+      
+      // Match Bluesky's button style
+      Object.assign(button.style, {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#208bfe',
+        padding: '13px 20px',
+        borderRadius: '8px',
+        gap: '8px',
+        color: 'white',
+        fontWeight: 'bold',
+        border: 'none',
+        cursor: 'pointer',
+        marginLeft: '10px'
+      });
+      
+      // Add click handler
+      button.addEventListener('click', generateCaptions);
+      
+      // Add button to the row
+      buttonRow.appendChild(button);
+      console.log('[addGenerateCaptionsButton] Added generate captions button');
+    };
+    
+    // Function to generate captions for a video
+    const generateCaptions = async () => {
+      try {
+        // Find media element in the dialog
+        const container = document.querySelector('[data-testid="composePostView"]') || document.body;
+        const videoElement = findMediaElement(container);
+        
+        if (!videoElement || !(videoElement instanceof HTMLVideoElement)) {
+          createToast('No video found to generate captions for', 'error');
+          return;
+        }
+        
+        // Show loading state
+        const button = document.getElementById(CAPTION_BUTTON_ID);
+        if (!button) return;
+        
+        const originalButtonText = button.textContent;
+        button.textContent = 'Processing...';
+        button.setAttribute('disabled', 'true');
+        button.style.opacity = '0.7';
+        
+        createToast('Analyzing video to generate captions...', 'info');
+        
+        // Get the video source
+        const mediaUrl = await getMediaSource(videoElement);
+        if (!mediaUrl) {
+          createToast('Could not access video content', 'error');
+          resetButton();
+          return;
+        }
+        
+        // Connect to background script
+        const port = browser.runtime.connect({ name: "captionGenerator" });
+        
+        // Set timeout to handle hanging requests
+        const timeoutId = setTimeout(() => {
+          port.disconnect();
+          createToast('Request timed out. The video might be too large or complex to process.', 'error');
+          resetButton();
+        }, 300000); // 5-minute timeout
+        
+        // Send the request
+        port.postMessage({
+          action: 'generateCaptions',
+          mediaUrl: mediaUrl,
+          duration: videoElement.duration || 0
+        });
+        
+        // Listen for response
+        port.onMessage.addListener((response) => {
+          clearTimeout(timeoutId);
+          
+          if (response.error) {
+            createToast(`Error: ${response.error}`, 'error');
+            resetButton();
+            return;
+          }
+          
+          if (response.vttContent) {
+            // Download the VTT file
+            downloadVTTFile(response.vttContent);
+            createToast('Captions generated and downloaded!', 'success');
+            
+            // Find the file input in the captions section
+            const fileInput = document.querySelector('input[type="file"][accept=".vtt"]');
+            if (fileInput) {
+              createToast('Please select the downloaded .vtt file', 'info', 6000);
+            }
+          }
+          
+          resetButton();
+        });
+        
+        port.onDisconnect.addListener(() => {
+          clearTimeout(timeoutId);
+          const lastError = browser.runtime.lastError;
+          if (lastError) {
+            console.error('[generateCaptions] Port disconnected with error:', lastError);
+            createToast('Connection error while generating captions', 'error');
+            resetButton();
+          }
+        });
+        
+        // Function to reset the button state
+        function resetButton() {
+          if (!button) return;
+          button.textContent = originalButtonText;
+          button.removeAttribute('disabled');
+          button.style.opacity = '1';
+        }
+      } catch (error) {
+        console.error('[generateCaptions] Error:', error);
+        createToast(`Error generating captions: ${error.message}`, 'error');
+        
+        // Reset button state
+        const button = document.getElementById(CAPTION_BUTTON_ID);
+        if (button) {
+          button.textContent = 'Generate Captions';
+          button.removeAttribute('disabled');
+          button.style.opacity = '1';
+        }
+      }
+    };
+    
+    // Helper function to download the VTT file
+    const downloadVTTFile = (vttContent: string) => {
+      const filename = `captions-${Date.now()}.vtt`;
+      const blob = new Blob([vttContent], { type: 'text/vtt' });
+      const url = URL.createObjectURL(blob);
+      
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      
+      // Clean up
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 100);
+    };
+    
+    // Modified MutationObserver to look for caption sections too
     const observeAltTextAreas = () => {
       if (manualModeObserver) manualModeObserver.disconnect(); 
       console.log('[observeAltTextAreas] Starting observer for manual button injection.');
       
       document.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR).forEach(addGenerateButton);
+      
+      // Also check for caption sections on initial load
+      addGenerateCaptionsButton();
 
       manualModeObserver = new MutationObserver((mutations) => {
         for (const mutation of mutations) {
@@ -938,12 +1150,24 @@ export default defineContentScript({
                 }
                 node.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR)
                   .forEach(addGenerateButton);
+                  
+                // Look for captions sections
+                if (node.textContent?.includes('Captions') || node.textContent?.includes('.vtt')) {
+                  setTimeout(addGenerateCaptionsButton, 500); // Wait a bit for UI to stabilize
+                }
               }
             });
           }
           if (mutation.type === 'attributes' && mutation.target instanceof HTMLElement && mutation.target.matches(ALT_TEXT_SELECTOR)) {
              addGenerateButton(mutation.target as HTMLTextAreaElement);
           }
+        }
+        
+        // Also check periodically for caption sections that might have been added
+        if (mutations.some(m => m.type === 'childList' && Array.from(m.addedNodes).some(n => 
+          n instanceof HTMLElement && (n.innerHTML?.includes('Captions') || n.innerHTML?.includes('.vtt'))
+        ))) {
+          setTimeout(addGenerateCaptionsButton, 500);
         }
       });
 
@@ -955,7 +1179,6 @@ export default defineContentScript({
       });
       console.log('[observeAltTextAreas] Observer attached to document body.');
     };
-    // --- END: Simplified Manual Mode Observer ---
     
     // --- Start Observer Directly ---
     // Ensure DOM is ready before starting
