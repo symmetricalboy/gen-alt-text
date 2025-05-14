@@ -1,3 +1,5 @@
+import iconUrl from '/icons/gen-alt-text-white.svg';
+
 export default defineContentScript({
   matches: ['*://*.bsky.app/*'],
   main() {
@@ -359,10 +361,19 @@ export default defineContentScript({
       button.id = BUTTON_ID;
       button.title = 'Generate Alt Text';
       
-      // Just use text, no icon
-      button.textContent = 'Generate Alt Text';
+      const icon = document.createElement('img');
+      icon.src = iconUrl;
+      icon.alt = 'AI';
+      Object.assign(icon.style, {
+        width: '16px',
+        height: '16px',
+        marginRight: '6px'
+      });
+
+      button.innerHTML = '';
+      button.appendChild(icon);
+      button.appendChild(document.createTextNode('Generate Alt Text'));
       
-      // Apply consistent styling
       Object.assign(button.style, {
           marginLeft: '8px',
           padding: '8px 16px', 
@@ -730,7 +741,21 @@ export default defineContentScript({
       
       const button = document.createElement('button');
       button.id = CAPTION_BUTTON_ID;
-      button.textContent = 'Generate Captions';
+      // Create icon element
+      const icon = document.createElement('img');
+      icon.src = iconUrl; // Use the imported URL
+      icon.alt = 'AI';
+      Object.assign(icon.style, {
+        width: '16px',
+        height: '16px',
+        marginRight: '6px'
+      });
+      
+      // Clear existing content and add icon and text
+      button.innerHTML = ''; // Clear any previous textContent
+      button.appendChild(icon);
+      button.appendChild(document.createTextNode('Generate Captions'));
+      
       button.setAttribute('aria-label', 'Generate captions using AI');
       button.setAttribute('role', 'button');
       button.setAttribute('tabindex', '0');
@@ -742,19 +767,19 @@ export default defineContentScript({
           flexDirection: computedStyle.flexDirection,
           alignItems: computedStyle.alignItems,
           justifyContent: computedStyle.justifyContent,
-          backgroundColor: '#208bfe',
           padding: computedStyle.padding,
           borderRadius: computedStyle.borderRadius,
           gap: computedStyle.gap,
-          color: computedStyle.color,
-          fontWeight: computedStyle.fontWeight,
           border: computedStyle.border,
           cursor: computedStyle.cursor,
-          marginLeft: '10px',
           height: computedStyle.height,
           fontFamily: computedStyle.fontFamily,
           fontSize: computedStyle.fontSize,
-          lineHeight: computedStyle.lineHeight
+          lineHeight: computedStyle.lineHeight,
+          backgroundColor: '#208bfe',
+          color: 'white',
+          fontWeight: 'bold',
+          marginLeft: '10px'
         });
       } else {
         Object.assign(button.style, {
