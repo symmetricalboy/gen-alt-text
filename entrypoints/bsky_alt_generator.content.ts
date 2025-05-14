@@ -363,7 +363,6 @@ export default defineContentScript({
       
       const icon = document.createElement('img');
       try {
-        // Pass the imported relative path to getURL()
         icon.src = browser.runtime.getURL(iconUrl);
       } catch (e) {
         console.error('[addGenerateButton] Error getting FULL icon URL:', e, 'Original iconUrl was:', iconUrl);
@@ -375,9 +374,10 @@ export default defineContentScript({
         marginRight: '6px'
       });
 
+      const buttonTextNode = document.createTextNode('Generate Alt Text');
       button.innerHTML = '';
-      button.appendChild(icon);
-      button.appendChild(document.createTextNode('Generate Alt Text'));
+      button.appendChild(icon.cloneNode(true)); // Append a clone of the icon
+      button.appendChild(buttonTextNode);
       
       Object.assign(button.style, {
           marginLeft: '8px',
@@ -395,7 +395,7 @@ export default defineContentScript({
       });
 
       // Store original style for quick reference
-      const originalText = button.textContent;
+      const originalButtonTextContent = 'Generate Alt Text'; // Just the text
       const originalBackgroundColor = button.style.backgroundColor;
       const originalCursor = button.style.cursor;
       // Add any other styles here if they are changed during processing
@@ -565,7 +565,9 @@ export default defineContentScript({
           console.error('[GeminiAltText] Generation error:', error);
         } finally {
           // Reset button style and text
-          button.textContent = originalText;
+          button.innerHTML = ''; // Clear button content
+          button.appendChild(icon.cloneNode(true)); // Re-append a clone of the icon
+          button.appendChild(document.createTextNode(originalButtonTextContent)); // Re-append the text
           button.style.backgroundColor = originalBackgroundColor;
           button.style.cursor = originalCursor;
           isRunning = false;
@@ -748,7 +750,6 @@ export default defineContentScript({
       button.id = CAPTION_BUTTON_ID;
       const icon = document.createElement('img');
       try {
-        // Pass the imported relative path to getURL()
         icon.src = browser.runtime.getURL(iconUrl);
       } catch (e) {
         console.error('[addGenerateCaptionsButton] Error getting FULL icon URL:', e, 'Original iconUrl was:', iconUrl);
