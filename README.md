@@ -68,3 +68,8 @@ I need to revise this documentation extensively, but the extension is working as
 ```cmd
 npm install && npx wxt build -b chrome --mv3 && npx wxt zip -b chrome --mv3 && npx wxt build -b firefox --mv2 && npx wxt zip -b firefox --mv2
 ```
+
+Let me also jot this down here for future reference:
+```cmd
+cd functions && gcloud functions deploy generateAltTextProxy --gen2 --runtime=nodejs20 --trigger-http --allow-unauthenticated
+```

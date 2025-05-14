@@ -182,13 +182,22 @@ export default defineBackground(() => {
         
         try {
           console.log('Sending request to Cloud Function:', CLOUD_FUNCTION_URL);
+          console.log('Request body size:', JSON.stringify(proxyRequestBody).length);
+          
+          // Make sure we handle very large requests appropriately
+          if (base64Data.length > 10000000) { // 10MB+
+            console.log('Very large request detected, using chunked transfer encoding if available');
+          }
+          
           const proxyResponse = await fetch(CLOUD_FUNCTION_URL, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
               },
               body: JSON.stringify(proxyRequestBody),
-              signal: controller.signal
+              signal: controller.signal,
+              // Force keeping the connection alive and use keep-alive for better large request handling
+              keepalive: true 
           });
           
           clearTimeout(timeoutId);
@@ -202,6 +211,12 @@ export default defineBackground(() => {
             if (proxyResponse.status === 403) {
               errorMsg = 'Access denied by the server. This is likely a CORS (Cross-Origin Resource Sharing) issue. The server needs to allow this extension to connect to it.';
               console.error('CORS issue detected: 403 Forbidden response from Cloud Function');
+            } else if (proxyResponse.status === 413) {
+              errorMsg = 'The video is too large to be processed. Please use a smaller video file.';
+              console.error('Request entity too large (413) response from Cloud Function');
+            } else if (proxyResponse.status === 0 || proxyResponse.status === 500 || proxyResponse.status === 502) {
+              errorMsg = 'The server experienced an error processing the video. This could be due to the file size or server load.';
+              console.error('Server error response from Cloud Function:', proxyResponse.status);
             } else {
               try {
                 const responseData = await proxyResponse.json();
@@ -247,6 +262,10 @@ export default defineBackground(() => {
           clearTimeout(timeoutId);
           if (e.name === 'AbortError') {
             return { error: 'Request timed out after several minutes. The video may be too complex to process.' };
+          }
+          if (e.message && e.message.includes('Failed to fetch')) {
+            console.error('Network fetch error:', e);
+            return { error: 'Network error: Unable to connect to the AI service. Please check your connection and try again.' };
           }
           throw e; // Re-throw for the outer catch block
         }

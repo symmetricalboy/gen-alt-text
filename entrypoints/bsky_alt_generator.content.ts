@@ -360,13 +360,24 @@ export default defineContentScript({
       button.title = 'Generate Alt Text';
       const iconUrl = browser.runtime.getURL("/icons/gen-alt-text.svg"); 
       button.innerHTML = `<img src="${iconUrl}" alt="Generate Alt Text Icon" width="20" height="20" style="display: block;"><span style="margin-left: 6px;">Generate Alt Text</span>`;
+      
+      // Update styling to match the captions button style
       Object.assign(button.style, {
-          marginLeft: '8px', padding: '6px 10px', cursor: 'pointer', border: '1px solid #ccc',
-          borderRadius: '4px', backgroundColor: '#f0f0f0', display: 'flex', alignItems: 'center',
-          justifyContent: 'center', fontSize: '12px', fontWeight: '500', color: '#000000'
+          marginLeft: '8px',
+          padding: '8px 16px', 
+          cursor: 'pointer',
+          border: 'none',
+          borderRadius: '8px',
+          backgroundColor: '#208bfe',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '14px',
+          fontWeight: 'bold',
+          color: 'white'
       });
 
-      const originalButtonContent = button.innerHTML; 
+      const originalButtonContent = button.innerHTML;
 
       // Add a styled progress bar to the button
       const createProgressContainer = () => {
@@ -966,7 +977,27 @@ export default defineContentScript({
     const findCaptionSection = (): HTMLElement | null => {
       // Try multiple approaches to find the caption section
       
-      // Method 1: Look for the captions section header (standard approach)
+      // Method 1: Look for the main Alt text & captions section first
+      const altTextAndCaptionSections = Array.from(document.querySelectorAll('div')).filter(
+        el => el.textContent?.includes('Alt text') && el.textContent?.includes('Captions')
+      );
+      
+      if (altTextAndCaptionSections.length > 0) {
+        console.log('[findCaptionSection] Found Alt text & captions section:', altTextAndCaptionSections[0]);
+        // Find the specific captions sub-section inside this container
+        const sections = altTextAndCaptionSections[0].querySelectorAll('div[style*="flex-direction"]');
+        for (const section of sections) {
+          if (section.textContent?.includes('Captions')) {
+            console.log('[findCaptionSection] Found caption subsection inside Alt text & captions:', section);
+            return section as HTMLElement;
+          }
+        }
+        // If we found the Alt text & captions section but not the captions subsection,
+        // return the main section as fallback
+        return altTextAndCaptionSections[0] as HTMLElement;
+      }
+      
+      // Method 2: Look for the captions section header directly
       const captionHeaders = Array.from(document.querySelectorAll('div')).filter(
         el => el.textContent?.includes('Captions') || el.textContent?.includes('.vtt')
       );
@@ -980,7 +1011,7 @@ export default defineContentScript({
         }
       }
       
-      // Method 2: Look for the file input that accepts .vtt files
+      // Method 3: Look for the file input that accepts .vtt files
       const vttInputs = document.querySelectorAll('input[type="file"][accept*=".vtt"]');
       if (vttInputs.length > 0) {
         const vttInput = vttInputs[0];
@@ -991,7 +1022,7 @@ export default defineContentScript({
         }
       }
       
-      // Method 3: Find a dialog that contains video controls and captions
+      // Method 4: Find a dialog that contains video controls and captions
       const videoDialogs = document.querySelectorAll('[role="dialog"]');
       for (const dialog of videoDialogs) {
         // Check if this dialog has video-related content

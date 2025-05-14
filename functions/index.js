@@ -443,7 +443,12 @@ In a real implementation, we would analyze the actual video.`;
           return res.status(500).json({ error: 'Failed to parse response from AI service' });
         }
 
-        // For video frames, ensure the user knows this was an optimization        let finalText = generatedText.trim();                if (isVideoFrame && !finalText.toLowerCase().startsWith("a frame from a video")) {            // Add a prefix if Gemini didn't use our suggested format            finalText = "A frame from a video showing " + finalText.charAt(0).toLowerCase() + finalText.slice(1);        }
+        // For video frames, ensure the user knows this was an optimization
+        let finalText = generatedText.trim();
+        if (isVideoFrame && !finalText.toLowerCase().startsWith("a frame from a video")) {
+            // Add a prefix if Gemini didn't use our suggested format
+            finalText = "A frame from a video showing " + finalText.charAt(0).toLowerCase() + finalText.slice(1);
+        }
 
         console.log('Successfully generated alt text for allowed origin.');
         // Send successful response back to the extension
