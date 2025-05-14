@@ -1,16 +1,16 @@
-# Bluesky Alt Text Generator (Chrome/Firefox Extension)
+# Bluesky Alt Text Generator (Chrome/Firefox Extension & Web App)
 
 ![Extension Icon](./public/icons/gen-alt-text.svg)
 
-This browser extension helps you generate detailed, accessible alt text for images and videos you add to posts on Bluesky, using Google Gemini AI.
+This browser extension helps you generate detailed, accessible alt text and captions for images and videos you add to posts on Bluesky, using Google Gemini AI.
 
 ## Features
 
-*   **Manual Generation:** Adds a ✨ button next to alt text fields on bsky.app. Click it to generate text on demand.
-*   **Supports Images & Videos:** Can generate alt text based on the content of both image and video uploads.
+*   **AI-Powered Generation:** Adds a ✨ button next to alt text fields on `bsky.app`. Click it to generate alt text or captions on demand.
+*   **Supports Images & Videos:** Can generate alt text and captions based on the content of both image and video uploads, including Tenor GIFs.
 *   **Toast Notifications:** Displays a confirmation message after generation, reminding you to review the text.
-*   **Privacy-Focused:** Media processing happens via the secure Google AI API.
-*   **Web App Available:** If you don't want to install an extension, you can use the [web app](https://alttext.symm.app) to generate alt text for any media.
+*   **Privacy-Focused:** Media processing happens via a secure Google Cloud Function proxy to the Google AI API.
+*   **Web App Available:** If you don't want to install an extension, or want to generate alt text for media outside of Bluesky, you can use the [web app](https://alttext.symm.app).
 
 ## Web Application
 
@@ -20,17 +20,16 @@ We also offer a simple web application that you can use from any device:
 
 The web app allows you to:
 - Upload images or videos (up to 10MB)
-- Generate AI-powered alt text
+- Generate AI-powered alt text and captions
 - Copy the results to your clipboard
 
 No installation required - just visit the site and start generating accessible alt text!
 
 ## Installation
 
-*(Instructions for installing from Chrome Web Store / Firefox Add-ons will go here)*
-
 1.  **From Store (Recommended):**
-    *   Coming Soon!
+    *   **Firefox:** [Get it from Mozilla Add-ons](https://addons.mozilla.org/en-US/firefox/addon/bluesky-alt-text-generator/)
+    *   **Chrome/Edge:** Coming Soon to the Chrome Web Store!
 2.  **Load Unpacked (Developer):**
     *   Clone this repository: `git clone https://github.com/symmetricalboy/gen-alt-text.git`
     *   Install dependencies: `npm install`
@@ -38,12 +37,12 @@ No installation required - just visit the site and start generating accessible a
     *   Open Chrome/Edge, go to `chrome://extensions` or `edge://extensions`.
     *   Enable "Developer mode".
     *   Click "Load unpacked" and select the `.output/chrome-mv3` directory.
-    *   (For Firefox, use `.output/firefox-mv3`)
+    *   (For Firefox, use `.output/firefox-mv2` if you are building the MV2 version, or `.output/firefox-mv3` for the MV3 version - note that the store version is MV2)
 
 ## Usage
 
 1.  Once installed, the extension is active on `bsky.app`.
-2.  When you upload an image or video and open the alt text input field (usually by clicking "ALT" or a similar button on the media preview), you will see a ✨ icon appear next to the text area.
+2.  When you upload an image or video and open the alt text input field (usually by clicking "ALT" or a similar button on the media preview), you will see a ✨ button appear next to the text area.
 3.  Click this icon to generate alt text based on the media.
 4.  **Review:** Always review the generated alt text before posting! AI can make mistakes. The generated text will appear in the input field, and a toast notification will confirm success or report errors.
 
