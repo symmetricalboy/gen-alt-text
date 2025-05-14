@@ -358,8 +358,9 @@ export default defineContentScript({
       const button = document.createElement('button');
       button.id = BUTTON_ID;
       button.title = 'Generate Alt Text';
-      const iconUrl = browser.runtime.getURL("/icons/gen-alt-text.svg"); 
-      button.innerHTML = `<img src="${iconUrl}" alt="Generate Alt Text Icon" width="20" height="20" style="display: block;"><span style="margin-left: 6px;">Generate Alt Text</span>`;
+      
+      // Simplified button without icon
+      button.textContent = 'Generate Alt Text';
       
       // Update styling to match the captions button style
       Object.assign(button.style, {
@@ -377,8 +378,8 @@ export default defineContentScript({
           color: 'white'
       });
 
-      const originalButtonContent = button.innerHTML;
-
+      const originalButtonContent = button.textContent;
+      
       // Add a styled progress bar to the button
       const createProgressContainer = () => {
         const container = document.createElement('div');
@@ -411,24 +412,28 @@ export default defineContentScript({
         // Create and append progress container
         const { container: progressContainer, progressBar } = createProgressContainer();
         
+        // Store original styling to restore later
+        const originalBackgroundColor = button.style.backgroundColor;
+        const originalColor = button.style.color;
+        const originalPadding = button.style.padding;
+        
         // Prepare the button for processing state
-        button.innerHTML = '';
+        button.textContent = '';
         button.disabled = true;
         
-        // Create a status message element with better styling
+        // Create a status message element
         const statusMessage = document.createElement('div');
         Object.assign(statusMessage.style, {
           fontSize: '12px',
           fontWeight: '500',
-          color: '#208bfe',
+          color: 'white',
           textAlign: 'center',
           width: '100%',
           whiteSpace: 'nowrap'
         });
         statusMessage.textContent = 'Finding Media...';
         
-        // Clear button and add status message
-        button.innerHTML = '';
+        // Add status message to button
         button.appendChild(statusMessage);
         
         // Ensure button has adequate width during processing
@@ -437,7 +442,7 @@ export default defineContentScript({
         Object.assign(button.style, {
           minWidth: `${minWidth}px`,
           padding: '6px 8px',
-          backgroundColor: '#f9f9f9'
+          backgroundColor: '#1a70c5'  // Slightly darker during processing
         });
         
         // Add progress bar to bottom of button
@@ -447,17 +452,6 @@ export default defineContentScript({
         const updateProgress = (percent, message) => {
           progressBar.style.width = `${percent}%`;
           statusMessage.textContent = message;
-          
-          // Change color based on progress type
-          if (message.includes('Error')) {
-            statusMessage.style.color = '#e74c3c';
-          } else if (percent >= 90) {
-            statusMessage.style.color = '#208bfe'; // Success blue
-          } else if (percent >= 70) {
-            statusMessage.style.color = '#3498db'; // Processing blue
-          } else {
-            statusMessage.style.color = '#f39c12'; // Progress orange
-          }
         };
         
         // Start with initial progress
@@ -467,12 +461,11 @@ export default defineContentScript({
             console.error('[generateAltText] mediaSearchContainer is null! Cannot search for media.');
             updateProgress(100, 'Error: Internal');
             setTimeout(() => { 
-                button.innerHTML = originalButtonContent; 
-                Object.assign(button.style, {
-                    minWidth: '',
-                    padding: '4px',
-                    backgroundColor: '#f0f0f0'
-                });
+                button.textContent = originalButtonContent;
+                button.style.backgroundColor = originalBackgroundColor;
+                button.style.color = originalColor;
+                button.style.padding = originalPadding;
+                button.style.minWidth = '';
                 button.disabled = false;
                 buttonContainer.removeChild(progressContainer);
             }, 3000);
@@ -489,12 +482,11 @@ export default defineContentScript({
             console.error('[generateAltText] Could not find valid media element.');
             updateProgress(100, 'Error: No Media');
             setTimeout(() => { 
-                button.innerHTML = originalButtonContent; 
-                Object.assign(button.style, {
-                    minWidth: '',
-                    padding: '4px',
-                    backgroundColor: '#f0f0f0'
-                });
+                button.textContent = originalButtonContent;
+                button.style.backgroundColor = originalBackgroundColor;
+                button.style.color = originalColor;
+                button.style.padding = originalPadding;
+                button.style.minWidth = '';
                 button.disabled = false;
                 buttonContainer.removeChild(progressContainer);
             }, 2000);
@@ -538,12 +530,11 @@ export default defineContentScript({
           createToast('Could not access media. Please try a different file.', 'error');
           
           setTimeout(() => { 
-            button.innerHTML = originalButtonContent; 
-            Object.assign(button.style, {
-                minWidth: '',
-                padding: '4px',
-                backgroundColor: '#f0f0f0'
-            });
+            button.textContent = originalButtonContent;
+            button.style.backgroundColor = originalBackgroundColor;
+            button.style.color = originalColor;
+            button.style.padding = originalPadding;
+            button.style.minWidth = '';
             button.disabled = false;
             buttonContainer.removeChild(progressContainer);
           }, 3000);
@@ -572,12 +563,11 @@ export default defineContentScript({
               createToast('Request timed out. The media might be too large or complex to process.', 'error');
               
               setTimeout(() => {
-                button.innerHTML = originalButtonContent;
-                Object.assign(button.style, {
-                    minWidth: '',
-                    padding: '4px',
-                    backgroundColor: '#f0f0f0'
-                });
+                button.textContent = originalButtonContent;
+                button.style.backgroundColor = originalBackgroundColor;
+                button.style.color = originalColor;
+                button.style.padding = originalPadding;
+                button.style.minWidth = '';
                 button.disabled = false;
                 buttonContainer.removeChild(progressContainer);
               }, 3000);
@@ -598,12 +588,11 @@ export default defineContentScript({
                 createToast('This video is too large to process (limit: 20MB). Please try a smaller or shorter video.', 'error');
                 
                 setTimeout(() => {
-                  button.innerHTML = originalButtonContent;
-                  Object.assign(button.style, {
-                    minWidth: '',
-                    padding: '4px',
-                    backgroundColor: '#f0f0f0'
-                  });
+                  button.textContent = originalButtonContent;
+                  button.style.backgroundColor = originalBackgroundColor;
+                  button.style.color = originalColor;
+                  button.style.padding = originalPadding;
+                  button.style.minWidth = '';
                   button.disabled = false;
                   buttonContainer.removeChild(progressContainer);
                 }, 3000);
@@ -689,12 +678,11 @@ export default defineContentScript({
                     createToast(`Error uploading media: ${uploadError.message}`, 'error');
                     
                     setTimeout(() => {
-                      button.innerHTML = originalButtonContent;
-                      Object.assign(button.style, {
-                        minWidth: '',
-                        padding: '4px',
-                        backgroundColor: '#f0f0f0'
-                      });
+                      button.textContent = originalButtonContent;
+                      button.style.backgroundColor = originalBackgroundColor;
+                      button.style.color = originalColor;
+                      button.style.padding = originalPadding;
+                      button.style.minWidth = '';
                       button.disabled = false;
                       buttonContainer.removeChild(progressContainer);
                     }, 3000);
@@ -731,7 +719,7 @@ export default defineContentScript({
                       whiteSpace: 'nowrap',
                       color: '#208bfe' // Success blue
                     });
-                    button.innerHTML = '';
+                    button.textContent = '';
                     button.appendChild(statusMessage);
                   }
                   
@@ -739,12 +727,11 @@ export default defineContentScript({
                   statusMessage.textContent = '✓ Done';
                   statusMessage.style.color = '#208bfe'; 
                   setTimeout(() => {
-                      button.innerHTML = originalButtonContent;
-                      Object.assign(button.style, {
-                        minWidth: '',
-                        padding: '4px',
-                        backgroundColor: '#f0f0f0'
-                      });
+                      button.textContent = originalButtonContent;
+                      button.style.backgroundColor = originalBackgroundColor;
+                      button.style.color = originalColor;
+                      button.style.padding = originalPadding;
+                      button.style.minWidth = '';
                       button.disabled = false;
                       buttonContainer.removeChild(progressContainer);
                   }, 1500);
@@ -770,7 +757,7 @@ export default defineContentScript({
                       width: '100%',
                       whiteSpace: 'nowrap'
                     });
-                    button.innerHTML = '';
+                    button.textContent = '';
                     button.appendChild(statusMessage);
                   }
                   
@@ -778,8 +765,11 @@ export default defineContentScript({
                   statusMessage.textContent = `Error: ${errorMsg.substring(0, 20)}...`;
                   statusMessage.style.color = '#e74c3c'; // Error red 
                   setTimeout(() => {
-                      button.innerHTML = originalButtonContent;
-                      button.style.color = ''; 
+                      button.textContent = originalButtonContent;
+                      button.style.backgroundColor = originalBackgroundColor;
+                      button.style.color = originalColor;
+                      button.style.padding = originalPadding;
+                      button.style.minWidth = '';
                       button.disabled = false;
                       buttonContainer.removeChild(progressContainer);
                   }, 3000);
@@ -797,13 +787,12 @@ export default defineContentScript({
                 const currentText = button.textContent;
                 if (currentText && !currentText.includes('Done') && !currentText.includes('Error')) {
                   updateProgress(100, 'Disconnect Err');
-                  button.style.color = '#000000'; 
-                  setTimeout(() => { 
-                      button.innerHTML = originalButtonContent; 
-                      button.style.color = ''; 
-                      button.disabled = false;
-                      buttonContainer.removeChild(progressContainer);
-                  }, 3000);
+                  button.style.backgroundColor = originalBackgroundColor;
+                  button.style.color = originalColor;
+                  button.style.padding = originalPadding;
+                  button.style.minWidth = '';
+                  button.disabled = false;
+                  buttonContainer.removeChild(progressContainer);
                 }
               });
               
@@ -866,7 +855,7 @@ export default defineContentScript({
                   width: '100%',
                   whiteSpace: 'nowrap'
                 });
-                button.innerHTML = '';
+                button.textContent = '';
                 button.appendChild(statusMessage);
               }
               
@@ -881,12 +870,11 @@ export default defineContentScript({
                 statusMessage.style.color = '#208bfe'; // Success blue
               } 
               setTimeout(() => {
-                  button.innerHTML = originalButtonContent;
-                  Object.assign(button.style, {
-                    minWidth: '',
-                    padding: '6px 10px',
-                    backgroundColor: '#f0f0f0'
-                  });
+                  button.textContent = originalButtonContent;
+                  button.style.backgroundColor = originalBackgroundColor;
+                  button.style.color = originalColor;
+                  button.style.padding = originalPadding;
+                  button.style.minWidth = '';
                   button.disabled = false;
                   buttonContainer.removeChild(progressContainer);
               }, isError ? 3000 : 1500);
@@ -903,17 +891,12 @@ export default defineContentScript({
               const currentText = button.textContent;
               if (currentText && !currentText.includes('Done') && !currentText.includes('Error')) {
                 updateProgress(100, 'Disconnect Err');
-                button.style.color = '#000000'; 
-                setTimeout(() => { 
-                    button.innerHTML = originalButtonContent; 
-                    Object.assign(button.style, {
-                      minWidth: '',
-                      padding: '4px',
-                      backgroundColor: '#f0f0f0'
-                    });
-                    button.disabled = false;
-                    buttonContainer.removeChild(progressContainer);
-                }, 3000);
+                button.style.backgroundColor = originalBackgroundColor;
+                button.style.color = originalColor;
+                button.style.padding = originalPadding;
+                button.style.minWidth = '';
+                button.disabled = false;
+                buttonContainer.removeChild(progressContainer);
               }
             });
 
@@ -938,14 +921,12 @@ export default defineContentScript({
             }
             
             button.textContent = errorMessage;
-            button.style.color = '#000000'; 
+            button.style.backgroundColor = originalBackgroundColor;
+            button.style.color = originalColor;
+            button.style.padding = originalPadding;
+            button.style.minWidth = '';
             setTimeout(() => { 
-                button.innerHTML = originalButtonContent; 
-                Object.assign(button.style, {
-                    minWidth: '',
-                    padding: '6px 10px',
-                    backgroundColor: '#f0f0f0'
-                });
+                button.textContent = originalButtonContent;
                 button.disabled = false;
                 buttonContainer.removeChild(progressContainer);
             }, 3000);
@@ -975,39 +956,34 @@ export default defineContentScript({
 
     // Find video caption section in dialog
     const findCaptionSection = (): HTMLElement | null => {
-      // Try multiple approaches to find the caption section
+      // Look for the captions section by trying multiple methods
       
-      // Method 1: Look for the main Alt text & captions section first
-      const altTextAndCaptionSections = Array.from(document.querySelectorAll('div')).filter(
-        el => el.textContent?.includes('Alt text') && el.textContent?.includes('Captions')
-      );
-      
-      if (altTextAndCaptionSections.length > 0) {
-        console.log('[findCaptionSection] Found Alt text & captions section:', altTextAndCaptionSections[0]);
-        // Find the specific captions sub-section inside this container
-        const sections = altTextAndCaptionSections[0].querySelectorAll('div[style*="flex-direction"]');
-        for (const section of sections) {
-          if (section.textContent?.includes('Captions')) {
-            console.log('[findCaptionSection] Found caption subsection inside Alt text & captions:', section);
-            return section as HTMLElement;
-          }
-        }
-        // If we found the Alt text & captions section but not the captions subsection,
-        // return the main section as fallback
-        return altTextAndCaptionSections[0] as HTMLElement;
-      }
-      
-      // Method 2: Look for the captions section header directly
-      const captionHeaders = Array.from(document.querySelectorAll('div')).filter(
-        el => el.textContent?.includes('Captions') || el.textContent?.includes('.vtt')
+      // Method 1: Try to find the Captions (.vtt) header directly
+      const captionHeaders = Array.from(document.querySelectorAll('div.css-146c3p1')).filter(
+        el => el.textContent?.includes('Captions (.vtt)')
       );
       
       if (captionHeaders.length > 0) {
-        const captionHeader = captionHeaders[0];
-        const captionSection = captionHeader.closest('div[style*="flex-direction"]');
+        console.log('[findCaptionSection] Found Captions (.vtt) header:', captionHeaders[0]);
+        // Find the parent row containing the caption header
+        const captionSection = captionHeaders[0].closest('div[style*="gap"]');
         if (captionSection) {
-          console.log('[findCaptionSection] Found caption section via text content:', captionSection);
+          console.log('[findCaptionSection] Found caption section via Captions (.vtt) header:', captionSection);
           return captionSection as HTMLElement;
+        }
+      }
+      
+      // Method 2: Look for the alt text & captions dialog and find the captions section
+      const altTextDialog = document.querySelector('div[aria-label="Video settings"][role="dialog"]');
+      if (altTextDialog) {
+        // Look for div containing the captions section
+        const sections = altTextDialog.querySelectorAll('div[style*="gap"]');
+        for (const section of sections) {
+          if (section.textContent?.includes('Captions') || 
+              section.textContent?.includes('.vtt')) {
+            console.log('[findCaptionSection] Found caption section via dialog:', section);
+            return section as HTMLElement;
+          }
         }
       }
       
@@ -1015,33 +991,11 @@ export default defineContentScript({
       const vttInputs = document.querySelectorAll('input[type="file"][accept*=".vtt"]');
       if (vttInputs.length > 0) {
         const vttInput = vttInputs[0];
-        const captionSection = vttInput.closest('div[style*="flex-direction"]');
+        // Find the closest parent div with flex-direction row
+        const captionSection = vttInput.closest('div[style*="flex-direction: row"], div[style*="flex-direction:row"]');
         if (captionSection) {
           console.log('[findCaptionSection] Found caption section via .vtt input:', captionSection);
           return captionSection as HTMLElement;
-        }
-      }
-      
-      // Method 4: Find a dialog that contains video controls and captions
-      const videoDialogs = document.querySelectorAll('[role="dialog"]');
-      for (const dialog of videoDialogs) {
-        // Check if this dialog has video-related content
-        const hasVideoContent = dialog.querySelector('video') != null;
-        if (hasVideoContent) {
-          // Look for caption-related elements in this dialog
-          const sections = dialog.querySelectorAll('div[style*="flex-direction"]');
-          for (const section of sections) {
-            if (section.textContent?.includes('Captions') || 
-                section.querySelector('input[type="file"]')) {
-              console.log('[findCaptionSection] Found caption section via video dialog:', section);
-              return section as HTMLElement;
-            }
-          }
-          
-          // If we found a video dialog but no caption section,
-          // return the dialog itself as a fallback for button insertion
-          console.log('[findCaptionSection] Found video dialog but no caption section, using dialog:', dialog);
-          return dialog as HTMLElement;
         }
       }
       
@@ -1055,16 +1009,6 @@ export default defineContentScript({
       const captionSection = findCaptionSection();
       if (!captionSection) {
         console.log('[addGenerateCaptionsButton] No caption section found, skipping button creation');
-        
-        // Look for any videos in the current page that might need captions
-        const container = document.querySelector('[data-testid="composePostView"]') || document.body;
-        const videoElement = findMediaElement(container);
-        
-        if (videoElement && videoElement instanceof HTMLVideoElement) {
-          console.log('[addGenerateCaptionsButton] Found video but no caption section:', videoElement);
-          // We could potentially add a tooltip or notification here
-        }
-        
         return;
       }
       
@@ -1075,22 +1019,16 @@ export default defineContentScript({
       }
       
       // Try to find an appropriate insertion point
-      let buttonContainer = null;
+      // Look for the flex-direction: row container that holds the ".vtt" file selection button
+      let buttonContainer = captionSection.querySelector('div[style*="flex-direction: row"], div[style*="flex-direction:row"]');
       
-      // First try: Look for a button row
-      buttonContainer = captionSection.querySelector('div[style*="flex-direction: row"], div[style*="flex-direction:row"]');
-      
-      // Second try: Look for any container that has buttons
+      // If we couldn't find the button container, create a new one
       if (!buttonContainer) {
-        const existingButtons = captionSection.querySelectorAll('button');
-        if (existingButtons.length > 0) {
-          buttonContainer = existingButtons[0].parentElement;
-        }
-      }
-      
-      // Final fallback: Use the caption section itself
-      if (!buttonContainer) {
-        buttonContainer = captionSection;
+        buttonContainer = document.createElement('div');
+        buttonContainer.className = 'css-175oi2r';
+        buttonContainer.style.flexDirection = 'row';
+        buttonContainer.style.marginTop = '8px';
+        captionSection.appendChild(buttonContainer);
       }
       
       console.log('[addGenerateCaptionsButton] Using button container:', buttonContainer);
@@ -1139,6 +1077,8 @@ export default defineContentScript({
           return;
         }
         
+        console.log('[generateCaptions] Found video element:', videoElement);
+        
         // Show loading state
         const button = document.getElementById(CAPTION_BUTTON_ID);
         if (!button) return;
@@ -1158,8 +1098,11 @@ export default defineContentScript({
           return;
         }
         
+        console.log(`[generateCaptions] Got media source URL: ${mediaUrl.substring(0, 50)}...`);
+        
         // Connect to background script
         const port = browser.runtime.connect({ name: "captionGenerator" });
+        console.log('[generateCaptions] Connected to background script');
         
         // Set timeout to handle hanging requests
         const timeoutId = setTimeout(() => {
@@ -1169,6 +1112,7 @@ export default defineContentScript({
         }, 300000); // 5-minute timeout
         
         // Send the request
+        console.log('[generateCaptions] Sending request to background script');
         port.postMessage({
           action: 'generateCaptions',
           mediaUrl: mediaUrl,
@@ -1178,8 +1122,10 @@ export default defineContentScript({
         // Listen for response
         port.onMessage.addListener((response) => {
           clearTimeout(timeoutId);
+          console.log('[generateCaptions] Received response from background script:', response);
           
           if (response.error) {
+            console.error('[generateCaptions] Error from background script:', response.error);
             createToast(`Error: ${response.error}`, 'error');
             resetButton();
             return;

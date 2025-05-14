@@ -243,6 +243,9 @@
         
         <section class="result-section">
             <h2>Generated Alt Text</h2>
+            <div class="status-box" id="status-message" style="margin-bottom: 10px; color: #666; font-size: 0.9rem; display: none;">
+                Processing... Please wait.
+            </div>
             <div class="result-box" id="result">
                 <p style="color: #666;">Generated alt text will appear here...</p>
             </div>
@@ -271,6 +274,7 @@
         const previewContainer = document.querySelector('.preview-container');
         const generateBtn = document.getElementById('generate-btn');
         const resultBox = document.getElementById('result');
+        const statusBox = document.getElementById('status-message');
         const copyBtn = document.getElementById('copy-btn');
         const captionBtn = document.getElementById('caption-btn');
         
@@ -322,6 +326,12 @@
         generateBtn.addEventListener('click', generateAltText);
         copyBtn.addEventListener('click', copyToClipboard);
         captionBtn.addEventListener('click', generateCaptions);
+        
+        // Function to update status message
+        function updateStatus(message, isVisible = true) {
+            statusBox.textContent = message;
+            statusBox.style.display = isVisible ? 'block' : 'none';
+        }
         
         // File handling
         function handleFileSelect() {
@@ -380,8 +390,9 @@
             previewContainer.style.display = 'block';
             generateBtn.disabled = false;
             
-            // Reset result
+            // Reset result and status
             resultBox.innerHTML = '<p style="color: #666;">Click "Generate Alt Text" to analyze this media...</p>';
+            updateStatus('', false);
             copyBtn.disabled = true;
             
             // Log file details
@@ -399,7 +410,7 @@
             const originalBtnText = generateBtn.innerHTML;
             generateBtn.innerHTML = '<span class="loading"></span>Generating...';
             generateBtn.disabled = true;
-            resultBox.innerHTML = '<p style="color: #666;">Processing... This may take longer for large videos.</p>';
+            updateStatus('Processing... This may take longer for large files.');
             
             // Set a timeout for the request - longer for large videos
             const timeoutDuration = currentFile.size > 10 * 1024 * 1024 ? 300000 : 180000; // 5 minutes for large files, 3 minutes for smaller ones
@@ -411,30 +422,30 @@
             if (currentFile.size > 10 * 1024 * 1024) {
                 processingTimer = setInterval(() => {
                     processingTime += 15;
-                    resultBox.innerHTML = `<p style="color: #666;">Still processing... (${processingTime} seconds elapsed)</p>`;
+                    updateStatus(`Still processing... (${processingTime} seconds elapsed)`);
                 }, 15000); // Update every 15 seconds
             }
             
             try {
                 // For large videos, show a warning
                 if (currentFile.type.startsWith('video/') && currentFile.size > 10 * 1024 * 1024) {
-                    resultBox.innerHTML = `<p style="color: orange;">Processing large video (${(currentFile.size / (1024 * 1024)).toFixed(1)}MB). This may take several minutes...</p>`;
+                    updateStatus(`Processing large video (${(currentFile.size / (1024 * 1024)).toFixed(1)}MB). This may take several minutes...`);
                 } else if (currentFile.type.startsWith('video/')) {
-                    resultBox.innerHTML = '<p style="color: #666;">Processing video...</p>';
+                    updateStatus('Processing video...');
                 } else {
-                    resultBox.innerHTML = '<p style="color: #666;">Processing image...</p>';
+                    updateStatus('Processing image...');
                 }
                 
                 // Convert to base64
-                resultBox.innerHTML = '<p style="color: #666;">Preparing file: 0% complete</p>';
+                updateStatus('Preparing file: 0% complete');
                 const base64Data = await fileToBase64(currentFile);
                 const mimeType = currentFile.type;
                 
-                resultBox.innerHTML = '<p style="color: #666;">Preparing file: 100% complete</p>';
+                updateStatus('Preparing file: 100% complete');
                 
                 // Update status to show we're now sending to API
                 setTimeout(() => {
-                    resultBox.innerHTML = '<p style="color: #666;">Sending to AI service...</p>';
+                    updateStatus('Sending to AI service...');
                 }, 500);
                 
                 // Create an AbortController to handle timeout
@@ -448,7 +459,7 @@
                 
                 // Update status to show the API is processing
                 setTimeout(() => {
-                    resultBox.innerHTML = '<p style="color: #666;">AI service is processing your media. This may take several minutes for large files...</p>';
+                    updateStatus('AI service is processing your media. This may take several minutes for large files...');
                 }, 3000);
                 
                 // Full video processing regardless of size
@@ -507,6 +518,7 @@
                     
                     if (data.altText) {
                         resultBox.textContent = data.altText;
+                        updateStatus('', false); // Hide status message on success
                         copyBtn.disabled = false;
                         showToast('Alt text generated successfully!', 'success');
                     } else {
@@ -522,7 +534,7 @@
                 
                 let errorMessage = error.message;
                 if (error.name === 'AbortError') {
-                    errorMessage = 'Request timed out after several minutes. The video may be too complex to process or the server is busy.';
+                    errorMessage = 'Request timed out after several minutes. The media may be too complex to process or the server is busy.';
                 } else if (error.message.includes('network') || error.message.includes('fetch')) {
                     errorMessage = 'Network error. Please check your connection and try again.';
                 } else if (error.message.includes('413') || error.message.includes('too large')) {
@@ -531,6 +543,7 @@
                     errorMessage = 'Received an invalid response from the server. The service might be experiencing issues.';
                 }
                 
+                updateStatus(`Error: ${errorMessage}`, true);
                 resultBox.innerHTML = `<p style="color: var(--error-color);">Error: ${errorMessage}</p>`;
                 showToast(errorMessage, 'error');
             } finally {
@@ -562,7 +575,7 @@
             
             try {
                 // Update status
-                resultBox.innerHTML = '<p style="color: #666;">Analyzing video for captions. This may take several minutes...</p>';
+                updateStatus('Analyzing video for captions. This may take several minutes...');
                 
                 // Convert to base64
                 const base64Data = await fileToBase64(currentFile);
@@ -595,7 +608,7 @@
                     let processingTime = 0;
                     const processingTimer = setInterval(() => {
                         processingTime += 15;
-                        resultBox.innerHTML = `<p style="color: #666;">Still analyzing video for captions... (${processingTime} seconds elapsed)</p>`;
+                        updateStatus(`Still analyzing video for captions... (${processingTime} seconds elapsed)`);
                     }, 15000); // Update every 15 seconds
                     
                     // Call the proxy function
@@ -625,6 +638,7 @@
                         // Download the VTT file
                         downloadVTTFile(data.vttContent);
                         
+                        updateStatus('', false);
                         resultBox.innerHTML = '<p style="color: var(--primary-color);">Captions generated and downloaded!</p>';
                         showToast('Captions generated and downloaded!', 'success');
                     } else {
@@ -638,11 +652,13 @@
                         errorMessage = 'Caption generation timed out. The video may be too complex to process.';
                     }
                     
+                    updateStatus(`Caption generation error: ${errorMessage}`, true);
                     resultBox.innerHTML = `<p style="color: var(--error-color);">Caption generation error: ${errorMessage}</p>`;
                     showToast(errorMessage, 'error');
                 }
             } catch (error) {
                 console.error('Error generating captions:', error);
+                updateStatus(`Error: ${error.message}`, true);
                 resultBox.innerHTML = `<p style="color: var(--error-color);">Error: ${error.message}</p>`;
                 showToast(`Error: ${error.message}`, 'error');
             } finally {
@@ -732,7 +748,7 @@
             return new Promise((resolve, reject) => {
                 // Update UI to show we're processing
                 if (file.size > 10 * 1024 * 1024) {
-                    resultBox.innerHTML = '<p style="color: orange;">Converting large file to base64. This may take a moment...</p>';
+                    updateStatus('Converting large file to base64. This may take a moment...', true);
                 }
                 
                 const reader = new FileReader();
@@ -750,7 +766,7 @@
                     if (event.lengthComputable) {
                         const percentLoaded = Math.round((event.loaded / event.total) * 100);
                         if (file.size > 2 * 1024 * 1024) { // Show progress for files > 2MB
-                            resultBox.innerHTML = `<p style="color: #666;">Preparing file: ${percentLoaded}% complete</p>`;
+                            updateStatus(`Preparing file: ${percentLoaded}% complete`, true);
                             
                             // Log progress for debugging large files
                             if (percentLoaded % 25 === 0 || percentLoaded === 99) {

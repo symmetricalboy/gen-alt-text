@@ -189,16 +189,24 @@ export default defineBackground(() => {
             console.log('Very large request detected, using chunked transfer encoding if available');
           }
           
-          const proxyResponse = await fetch(CLOUD_FUNCTION_URL, {
+          // Build the fetch options with appropriate headers
+          const fetchOptions = {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
+                'Connection': 'keep-alive',
+                'Accept': 'application/json',
+                'Cache-Control': 'no-cache'
               },
               body: JSON.stringify(proxyRequestBody),
               signal: controller.signal,
               // Force keeping the connection alive and use keep-alive for better large request handling
-              keepalive: true 
-          });
+              keepalive: true
+          };
+          
+          console.log(`Starting fetch request at ${new Date().toISOString()}`);
+          const proxyResponse = await fetch(CLOUD_FUNCTION_URL, fetchOptions);
+          console.log(`Received response at ${new Date().toISOString()}, status: ${proxyResponse.status}`);
           
           clearTimeout(timeoutId);
           
@@ -212,10 +220,10 @@ export default defineBackground(() => {
               errorMsg = 'Access denied by the server. This is likely a CORS (Cross-Origin Resource Sharing) issue. The server needs to allow this extension to connect to it.';
               console.error('CORS issue detected: 403 Forbidden response from Cloud Function');
             } else if (proxyResponse.status === 413) {
-              errorMsg = 'The video is too large to be processed. Please use a smaller video file.';
+              errorMsg = 'The media is too large to be processed. Please use a smaller file.';
               console.error('Request entity too large (413) response from Cloud Function');
             } else if (proxyResponse.status === 0 || proxyResponse.status === 500 || proxyResponse.status === 502) {
-              errorMsg = 'The server experienced an error processing the video. This could be due to the file size or server load.';
+              errorMsg = 'The server experienced an error processing your request. This could be due to the file size or server load.';
               console.error('Server error response from Cloud Function:', proxyResponse.status);
             } else {
               try {
@@ -229,10 +237,12 @@ export default defineBackground(() => {
             return { error: errorMsg };
           }
           
+          console.log(`Parsing JSON response at ${new Date().toISOString()}`);
           const responseData = await proxyResponse.json();
+          console.log(`Finished parsing JSON at ${new Date().toISOString()}`);
 
           if (responseData && typeof responseData.altText === 'string') {
-              // console.log('Received alt text from proxy:', responseData.altText);
+              console.log(`Successfully received alt text, length: ${responseData.altText.length} characters`);
               
               let altText = responseData.altText;
               
@@ -260,19 +270,25 @@ export default defineBackground(() => {
           }
         } catch (e) {
           clearTimeout(timeoutId);
+          console.error('Fetch error details:', e);
+          
           if (e.name === 'AbortError') {
-            return { error: 'Request timed out after several minutes. The video may be too complex to process.' };
+            return { error: 'Request timed out after several minutes. The media may be too complex to process.' };
           }
           if (e.message && e.message.includes('Failed to fetch')) {
             console.error('Network fetch error:', e);
-            return { error: 'Network error: Unable to connect to the AI service. Please check your connection and try again.' };
+            return { error: 'Network error: Unable to connect to the AI service. Please check your connection or try again later.' };
           }
-          throw e; // Re-throw for the outer catch block
+          if (e.message && e.message.includes('NetworkError')) {
+            console.error('Network error:', e);
+            return { error: 'Network error: Connection interrupted. Please try again.' };
+          }
+          return { error: `Error: ${e.message || 'Unknown error occurred'}` };
         }
       } catch (error: unknown) {
           console.error('Error calling alt text proxy:', error);
           const errorMessage = error instanceof Error ? error.message : 'Unknown error communicating with proxy';
-          return { error: `Network/Request Error: ${errorMessage}` };
+          return { error: `Request Error: ${errorMessage}` };
       }
   }
   
