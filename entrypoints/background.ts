@@ -25,6 +25,9 @@ export default defineBackground(() => {
   
   // Maximum length for alt text to avoid "Message length exceeded maximum allowed length" error
   const MAX_ALT_TEXT_LENGTH = 2000;
+
+  // Hard limit for any text before we try to condense it
+  const ABSOLUTE_MAX_LENGTH = 5000;
   
   if (!CLOUD_FUNCTION_URL || CLOUD_FUNCTION_URL === 'YOUR_FUNCTION_URL_HERE') {
     console.error(
@@ -100,11 +103,17 @@ export default defineBackground(() => {
         const { base64Data, mimeType } = await getBase64Data(source);
         console.log(`Sending request to proxy for ${mimeType}`);
 
+        // Check if this is a potentially problematic large video
+        const isLargeData = base64Data.length > 1000000; // Over 1MB of base64 data
+        if (isVideo && isLargeData) {
+          console.warn('Large video detected, this may result in a very long description');
+        }
+
         // 2. Prepare request body for the Cloud Function Proxy
         const proxyRequestBody = {
             base64Data: base64Data,
-            mimeType: mimeType
-            // isVideo: isVideo // We could send this if the function needed it
+            mimeType: mimeType,
+            isVideo: isVideo // Now sending this to allow backend to optimize for videos
         };
 
         // 3. Call the Cloud Function Proxy
@@ -129,11 +138,23 @@ export default defineBackground(() => {
         if (responseData && typeof responseData.altText === 'string') {
             // console.log('Received alt text from proxy:', responseData.altText);
             
-            // Truncate alt text if it exceeds the maximum length
             let altText = responseData.altText;
+            
+            // Check if text exceeds the maximum length
             if (altText.length > MAX_ALT_TEXT_LENGTH) {
-              console.warn(`Alt text exceeds maximum length (${altText.length} > ${MAX_ALT_TEXT_LENGTH}), truncating...`);
-              altText = altText.substring(0, MAX_ALT_TEXT_LENGTH - 3) + '...';
+              console.warn(`Alt text exceeds maximum length (${altText.length} > ${MAX_ALT_TEXT_LENGTH}), condensing instead of truncating...`);
+              
+              // Use Gemini to condense the text instead of truncating
+              altText = await condenseAltText(altText, isVideo);
+              
+              // Add a note if the text was condensed
+              if (isVideo) {
+                const condensedNote = "[Note: This video description was automatically condensed to fit character limits.]\n\n";
+                // Only add the note if there's room for it
+                if (altText.length + condensedNote.length <= MAX_ALT_TEXT_LENGTH) {
+                  altText = condensedNote + altText;
+                }
+              }
             }
             
             return { altText: altText };
@@ -216,6 +237,57 @@ export default defineBackground(() => {
     // No async work started, so return false
     // return true; // Only return true if you intend to call sendResponse asynchronously
   });
+
+  // Function to condense alt text by making another API call to Gemini
+  async function condenseAltText(originalText: string, isVideo: boolean): Promise<string> {
+    if (!CLOUD_FUNCTION_URL) {
+      console.error('Cannot condense alt text: Cloud Function URL is not configured.');
+      return originalText.substring(0, MAX_ALT_TEXT_LENGTH - 3) + '...';
+    }
+
+    try {
+      // Create a directive for Gemini to condense the text to the target length
+      const targetLength = MAX_ALT_TEXT_LENGTH - 100; // Leave some buffer space
+      const mediaType = isVideo ? "video" : "image";
+      const directive = `You are an expert at writing concise, informative alt text. Please condense the following ${mediaType} description to be no more than ${targetLength} characters while preserving the most important details. The description needs to be accessible and useful for screen readers:`;
+      
+      // Truncate the original text if it's extremely long to prevent message size issues
+      const safeOriginalText = originalText.length > ABSOLUTE_MAX_LENGTH 
+        ? originalText.substring(0, ABSOLUTE_MAX_LENGTH - 100) + "... [content truncated for processing]" 
+        : originalText;
+
+      // Create a special request for the condensing operation
+      const condensingRequest = {
+        operation: "condense_text",
+        directive: directive,
+        text: safeOriginalText,
+        targetLength: targetLength
+      };
+
+      // Call the Cloud Function with this special request
+      const response = await fetch(CLOUD_FUNCTION_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(condensingRequest)
+      });
+
+      const responseData = await response.json();
+
+      if (!response.ok || !responseData.altText) {
+        console.error('Failed to condense alt text:', responseData);
+        // Fall back to truncation if condensing fails
+        return originalText.substring(0, MAX_ALT_TEXT_LENGTH - 3) + '...';
+      }
+
+      return responseData.altText;
+    } catch (error) {
+      console.error('Error condensing alt text:', error);
+      // Fall back to truncation if condensing fails
+      return originalText.substring(0, MAX_ALT_TEXT_LENGTH - 3) + '...';
+    }
+  }
 
   console.log('Background script proxy mode event listeners attached.');
 }); 

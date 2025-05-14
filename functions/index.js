@@ -156,6 +156,54 @@ functions.http('generateAltTextProxy', async (req, res) => {
 
     try {
         // --- Input Validation ---
+        // Check if this is a special condensing request
+        if (req.body.operation === 'condense_text') {
+            if (!req.body.text || !req.body.directive || !req.body.targetLength) {
+                return res.status(400).json({ error: 'Missing required fields for text condensation' });
+            }
+            
+            console.log(`Processing text condensation request, targetLength: ${req.body.targetLength}, text length: ${req.body.text.length}`);
+            
+            // Call Gemini API for text condensation
+            const condensingRequestBody = {
+                contents: [{
+                    parts: [
+                        { text: req.body.directive },
+                        { text: req.body.text }
+                    ]
+                }],
+                generationConfig: {
+                    temperature: 0.2, // Lower temperature for more deterministic output
+                    maxOutputTokens: 1024 // Limit output size
+                }
+            };
+            
+            const geminiResponse = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(condensingRequestBody)
+            });
+            
+            const geminiData = await geminiResponse.json();
+            
+            if (!geminiResponse.ok) {
+                console.error('Gemini API Error in text condensation:', JSON.stringify(geminiData));
+                const errorMsg = geminiData?.error?.message || `Gemini API failed with status ${geminiResponse.status}`;
+                return res.status(geminiResponse.status >= 500 ? 502 : 400).json({ error: `Gemini API Error: ${errorMsg}` });
+            }
+            
+            const condensedText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
+            
+            if (!condensedText) {
+                console.error('Could not extract condensed text from Gemini response:', JSON.stringify(geminiData));
+                return res.status(500).json({ error: 'Failed to parse response from AI service' });
+            }
+            
+            console.log(`Successfully condensed text from ${req.body.text.length} to ${condensedText.length} characters`);
+            return res.status(200).json({ altText: condensedText.trim() });
+        }
+        
+        // Regular image/video alt text generation
         const { base64Data, mimeType } = req.body;
         if (!base64Data || !mimeType) {
             return res.status(400).json({ error: 'Missing required fields: base64Data and mimeType' });

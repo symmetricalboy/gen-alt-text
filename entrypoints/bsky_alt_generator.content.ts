@@ -379,8 +379,10 @@ export default defineContentScript({
             
             // Check for message length exceeded error
             if (error instanceof Error && error.message.includes('Message length exceeded maximum allowed length')) {
-              errorMessage = 'Text Too Long';
-              createToast('The generated alt text was too long. It has been truncated.', 'warning');
+              errorMessage = 'Condensing...';
+              createToast('The alt text was too long. It will be automatically condensed for better quality.', 'info');
+              // Don't reset the button here, as we'll wait for the condensed result
+              return; // Return early so we don't reset the button
             }
             
             button.textContent = errorMessage;
