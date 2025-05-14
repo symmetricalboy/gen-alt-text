@@ -474,23 +474,29 @@ export default defineContentScript({
                 resolve();
               } else if (response.error) {
                 const errorMsg = typeof response.error === 'string' ? response.error : 'Unknown error';
-                
-                // Check for size-related error messages and standardize them
+                let refinedErrorMessage = errorMsg; // This will be the message for the Error object
+
+                // Standardize size-related error messages for the toast
                 if (errorMsg.toLowerCase().includes('too large') || 
                     errorMsg.toLowerCase().includes('413') || 
                     errorMsg.toLowerCase().includes('request entity too large') ||
                     errorMsg.toLowerCase().includes('payload too large') ||
                     errorMsg.toLowerCase().includes('message length exceeded') ||
                     errorMsg.toLowerCase().includes('size limit')) {
-                  createToast('Server error: File exceeds size limits (max 20MB). Please use a smaller file.', 'error');
+                  refinedErrorMessage = 'Server error: File exceeds size limits (max 20MB). Please use a smaller file.';
+                  createToast(refinedErrorMessage, 'error');
                 } else {
-                  createToast(`Error: ${errorMsg}`, 'error');
+                  // For other errors from background, display them directly (they might be prefixed with "Error:" already or not)
+                  createToast(errorMsg.startsWith('Error: ') ? errorMsg : `Error: ${errorMsg}`, 'error');
+                  // Keep refinedErrorMessage as the original errorMsg for the rejection if not size-related
                 }
                 
-                reject(new Error(errorMsg));
+                // Reject with a message indicating it was handled by the port listener's toast,
+                // using the refined message if applicable, or original for others.
+                reject(new Error(`PORT_ERROR_HANDLED: ${refinedErrorMessage}`));
               } else {
                 createToast('Unexpected message format from background script.', 'error');
-                reject(new Error('Unexpected message format'));
+                reject(new Error('PORT_ERROR_HANDLED: Unexpected message format'));
               }
               try { port.disconnect(); } catch (e) { /* Ignore */ }
             });
@@ -561,8 +567,15 @@ export default defineContentScript({
         try {
           await generateAndFillAltText(textArea);
         } catch (error) {
-          createToast(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
-          console.error('[GeminiAltText] Generation error:', error);
+          // Check if the error message indicates it was already handled by the port listener's toast
+          if (error instanceof Error && error.message.startsWith('PORT_ERROR_HANDLED:')) {
+            // Log the handled error message without showing another toast
+            console.error('[GeminiAltText] Port error already handled by toast:', error.message.substring('PORT_ERROR_HANDLED: '.length));
+          } else {
+            // For other errors, create a toast
+            createToast(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+            console.error('[GeminiAltText] Generation error:', error);
+          }
         } finally {
           // Reset button style and text
           button.innerHTML = ''; // Clear button content

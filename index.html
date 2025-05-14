@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head>    <meta charset="UTF-8">    <meta name="viewport" content="width=device-width, initial-scale=1.0">    <title>Bluesky Alt Text Generator</title>    <link rel="icon" href="public/icons/favicon.ico" type="image/x-icon">    <link rel="manifest" href="/manifest.json">    <meta name="theme-color" content="#208bfe">    <meta name="apple-mobile-web-app-capable" content="yes">    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">    <meta name="apple-mobile-web-app-title" content="Alt Text">    <link rel="apple-touch-icon" href="/public/icons/full-bleed-icon-128.png">
+<!DOCTYPE html><html lang="en"><head>    <meta charset="UTF-8">    <meta name="viewport" content="width=device-width, initial-scale=1.0">    <title>Bluesky Alt Text Generator</title>    <link rel="icon" href="/favicon.ico" type="image/x-icon">    <link rel="manifest" href="/manifest.json">    <meta name="theme-color" content="#208bfe">    <meta name="apple-mobile-web-app-capable" content="yes">    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">    <meta name="apple-mobile-web-app-title" content="Alt Text">    <link rel="apple-touch-icon" href="/public/icons/full-bleed-icon-128.png">
     <style>
         :root {
             --primary-color: #208bfe;
@@ -457,10 +457,20 @@
                         copyBtn.disabled = false;
                         showToast('Alt text generated successfully!', 'success');
                     } else if (data.error) {
-                        // Error from server
-                        updateStatus(`Error: ${data.error}`, true);
+                        // Error from server - data.error might be the raw message
+                        let displayErrorMessage = data.error;
+                        if (typeof data.error === 'string' &&
+                            (data.error.toLowerCase().includes('too large') ||
+                             data.error.toLowerCase().includes('request entity too large') ||
+                             data.error.toLowerCase().includes('payload too large') ||
+                             data.error.toLowerCase().includes('message length exceeded'))) {
+                            // Attempt to get MAX_FILE_SIZE, default if not found (though it should be defined)
+                            const fileSizeMB = typeof MAX_FILE_SIZE !== 'undefined' ? MAX_FILE_SIZE / (1024 * 1024) : 20;
+                            displayErrorMessage = `Server error: File exceeds size limits (max ${fileSizeMB}MB). Please use a smaller file.`;
+                        }
+                        updateStatus(`Error: ${displayErrorMessage}`, true);
                         updateResult('');
-                        showToast(data.error, 'error');
+                        showToast(displayErrorMessage, 'error');
                     } else {
                         // Unexpected response
                         updateStatus('Unexpected response from server', true);
