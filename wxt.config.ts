@@ -51,7 +51,7 @@ export default defineConfig({
     // Web accessible resources for icon usage in content scripts
     web_accessible_resources: [
       {
-        resources: ['icons/*'],
+        resources: ['icons/*', 'assets/*'], // Explicitly add assets/*
         matches: ['*://*.bsky.app/*']
       }
     ],

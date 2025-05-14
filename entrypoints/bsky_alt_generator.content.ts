@@ -362,7 +362,12 @@ export default defineContentScript({
       button.title = 'Generate Alt Text';
       
       const icon = document.createElement('img');
-      icon.src = iconUrl;
+      try {
+        // Pass the imported relative path to getURL()
+        icon.src = browser.runtime.getURL(iconUrl);
+      } catch (e) {
+        console.error('[addGenerateButton] Error getting FULL icon URL:', e, 'Original iconUrl was:', iconUrl);
+      }
       icon.alt = 'AI';
       Object.assign(icon.style, {
         width: '16px',
@@ -741,9 +746,13 @@ export default defineContentScript({
       
       const button = document.createElement('button');
       button.id = CAPTION_BUTTON_ID;
-      // Create icon element
       const icon = document.createElement('img');
-      icon.src = iconUrl; // Use the imported URL
+      try {
+        // Pass the imported relative path to getURL()
+        icon.src = browser.runtime.getURL(iconUrl);
+      } catch (e) {
+        console.error('[addGenerateCaptionsButton] Error getting FULL icon URL:', e, 'Original iconUrl was:', iconUrl);
+      }
       icon.alt = 'AI';
       Object.assign(icon.style, {
         width: '16px',
