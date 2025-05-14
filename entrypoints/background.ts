@@ -29,6 +29,9 @@ export default defineBackground(() => {
   // Hard limit for any text before we try to condense it
   const ABSOLUTE_MAX_LENGTH = 5000;
   
+  // Max size for direct blob processing (in bytes)
+  const MAX_DIRECT_BLOB_SIZE = 5 * 1024 * 1024; // 5MB
+  
   if (!CLOUD_FUNCTION_URL || CLOUD_FUNCTION_URL === 'YOUR_FUNCTION_URL_HERE') {
     console.error(
       'VITE_CLOUD_FUNCTION_URL is not configured or is set to the placeholder value. ' +
@@ -51,7 +54,7 @@ export default defineBackground(() => {
   };
 
   // 2. Update getBase64Data to handle different source types (Data URL, HTTP URL)
-  async function getBase64Data(source: string): Promise<{ base64Data: string; mimeType: string }> {
+  async function getBase64Data(source: string, isLargeVideo: boolean = false): Promise<{ base64Data: string; mimeType: string }> {
       if (source.startsWith('data:')) {
           console.log('[getBase64Data] Source is Data URL, extracting...');
           const parts = source.match(/^data:(.+?);base64,(.*)$/);
@@ -72,7 +75,22 @@ export default defineBackground(() => {
               if (!response.ok) {
                   throw new Error(`Failed to fetch URL: ${response.status} ${response.statusText}`);
               }
+              
               const blob = await response.blob();
+              console.log(`[getBase64Data] Fetched blob of size: ${blob.size} bytes, type: ${blob.type}`);
+              
+              // Add an optimization for large videos
+              if (isLargeVideo || blob.size > MAX_DIRECT_BLOB_SIZE) {
+                  console.log('[getBase64Data] Large media detected, using optimized processing');
+                  const mimeType = blob.type;
+                  
+                  // For large videos, get a better frame sample instead of the full video
+                  if (mimeType.startsWith('video/')) {
+                      console.log('[getBase64Data] Processing large video with optimized method');
+                      return await optimizedVideoProcessing(blob, mimeType);
+                  }
+              }
+              
               const dataUrl = await blobToDataURL(blob);
               console.log('[getBase64Data] Successfully fetched and converted URL to Data URL.');
               // Re-run with the dataUrl to extract parts
@@ -81,17 +99,128 @@ export default defineBackground(() => {
               console.error('[getBase64Data] Error fetching or converting URL:', fetchError);
               throw new Error(`Failed to fetch or process media URL: ${fetchError instanceof Error ? fetchError.message : fetchError}`);
           }
+      } else if (source.startsWith('blob:')) {
+          console.log('[getBase64Data] Source is Blob URL, fetching...', source);
+          try {
+              const response = await fetch(source);
+              if (!response.ok) {
+                  throw new Error(`Failed to fetch blob URL: ${response.status} ${response.statusText}`);
+              }
+              
+              const blob = await response.blob();
+              console.log(`[getBase64Data] Fetched blob of size: ${blob.size} bytes, type: ${blob.type}`);
+              
+              // Add an optimization for large videos
+              if (isLargeVideo || blob.size > MAX_DIRECT_BLOB_SIZE) {
+                  console.log('[getBase64Data] Large media detected, using optimized processing');
+                  const mimeType = blob.type;
+                  
+                  // For large videos, get a better frame sample instead of the full video
+                  if (mimeType.startsWith('video/')) {
+                      console.log('[getBase64Data] Processing large video with optimized method');
+                      return await optimizedVideoProcessing(blob, mimeType);
+                  }
+              }
+              
+              const dataUrl = await blobToDataURL(blob);
+              console.log('[getBase64Data] Successfully fetched and converted blob URL to Data URL.');
+              // Re-run with the dataUrl to extract parts
+              return await getBase64Data(dataUrl);
+          } catch (fetchError) {
+              console.error('[getBase64Data] Error fetching or converting blob URL:', fetchError);
+              throw new Error(`Failed to fetch or process blob URL: ${fetchError instanceof Error ? fetchError.message : fetchError}`);
+          }
       } else {
           console.error('[getBase64Data] ERROR: Received unsupported source type:', source.substring(0, 100) + '...');
           throw new Error('Background script received an unsupported source type.');
       }
   }
   
+  // Helper function to optimize video processing by extracting frames
+  async function optimizedVideoProcessing(videoBlob: Blob, mimeType: string): Promise<{ base64Data: string; mimeType: string }> {
+      return new Promise((resolve, reject) => {
+          try {
+              // Create a video element to load the blob
+              const video = document.createElement('video');
+              video.muted = true;
+              video.autoplay = false;
+              video.controls = false;
+              
+              // Create object URL from the blob
+              const objectUrl = URL.createObjectURL(videoBlob);
+              
+              // Set up event handlers
+              video.onloadedmetadata = () => {
+                  console.log(`[optimizedVideoProcessing] Video metadata loaded: ${video.videoWidth}x${video.videoHeight}, duration: ${video.duration}s`);
+                  
+                  // Seek to 20% into the video for a representative frame
+                  const seekTime = Math.min(video.duration * 0.2, 3); // 20% or 3 seconds, whichever is less
+                  video.currentTime = seekTime;
+              };
+              
+              video.onseeked = () => {
+                  try {
+                      // Create canvas to capture the frame
+                      const canvas = document.createElement('canvas');
+                      const ctx = canvas.getContext('2d');
+                      
+                      if (!ctx) {
+                          throw new Error('Failed to get canvas 2D context');
+                      }
+                      
+                      // Set canvas size to match video dimensions
+                      canvas.width = video.videoWidth;
+                      canvas.height = video.videoHeight;
+                      
+                      // Draw the current video frame to the canvas
+                      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                      
+                      // Get the data URL from the canvas (this is a JPEG frame from the video)
+                      const frameDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+                      
+                      // Clean up
+                      URL.revokeObjectURL(objectUrl);
+                      
+                      // Extract base64 data from data URL
+                      const base64Match = frameDataUrl.match(/^data:(.+?);base64,(.*)$/);
+                      if (!base64Match || base64Match.length < 3) {
+                          throw new Error('Failed to extract base64 data from frame');
+                      }
+                      
+                      // Return the frame data instead of the full video
+                      resolve({
+                          base64Data: base64Match[2],
+                          mimeType: base64Match[1], // This will be image/jpeg
+                      });
+                      
+                      console.log('[optimizedVideoProcessing] Successfully extracted and processed video frame');
+                  } catch (frameError) {
+                      console.error('[optimizedVideoProcessing] Error extracting frame:', frameError);
+                      reject(frameError);
+                  }
+              };
+              
+              video.onerror = (e) => {
+                  console.error('[optimizedVideoProcessing] Error loading video:', e);
+                  URL.revokeObjectURL(objectUrl);
+                  reject(new Error('Failed to load video for processing'));
+              };
+              
+              // Start loading the video
+              video.src = objectUrl;
+              
+          } catch (setupError) {
+              console.error('[optimizedVideoProcessing] Setup error:', setupError);
+              reject(setupError);
+          }
+      });
+  }
+
   // --- Alt Text Generation Logic (Modified to call Proxy) ---
-  // !! Copied from the incorrect background script version !!
   async function generateAltTextViaProxy(
     source: string, // Expecting Data URL from content script
-    isVideo: boolean // Keep this, might be useful later
+    isVideo: boolean, // Keep this, might be useful later
+    isLargeVideo: boolean = false // New flag for optimized processing
   ): Promise<PortResponse> { // Return type matches PortResponse
       if (!CLOUD_FUNCTION_URL || CLOUD_FUNCTION_URL === 'YOUR_FUNCTION_URL_HERE') {
           console.error('Cannot generate alt text: Cloud Function URL is not configured.');
@@ -100,7 +229,7 @@ export default defineBackground(() => {
 
       try {
         // 1. Get Base64 data and final mime type
-        const { base64Data, mimeType } = await getBase64Data(source);
+        const { base64Data, mimeType } = await getBase64Data(source, isLargeVideo);
         console.log(`Sending request to proxy for ${mimeType}`);
 
         // Check if this is a potentially problematic large video
@@ -183,8 +312,14 @@ export default defineBackground(() => {
         if (message && message.action === 'generateAltText' && typeof message.mediaUrl === 'string' && typeof message.isVideo === 'boolean') {
           console.log(`Port request: Generate alt text for ${message.mediaUrl.substring(0,60)}..., isVideo: ${message.isVideo}`);
           
+          // Extract isLargeVideo flag if present
+          const isLargeVideo = !!message.isLargeVideo;
+          if (isLargeVideo) {
+            console.log('Message indicates this is a large video, will use optimized processing');
+          }
+          
           // *** Call the updated proxy function (which now handles URL fetching) ***
-          const result: PortResponse = await generateAltTextViaProxy(message.mediaUrl, message.isVideo);
+          const result: PortResponse = await generateAltTextViaProxy(message.mediaUrl, message.isVideo, isLargeVideo);
           // --- END: Updated validation & calling proxy ---
           
           console.log('Sending result back via port:', result);

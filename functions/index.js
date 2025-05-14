@@ -217,20 +217,35 @@ functions.http('generateAltTextProxy', async (req, res) => {
              // Allow it for now, Gemini might handle it, but consider stricter validation
         }
 
+        // Get isVideo flag if present (helps with proper description prompting)
+        const isVideo = req.body.isVideo === true;
+        // Check if this is a processed frame from a video (optimization for large videos)
+        const isVideoFrame = isVideo && mimeType.startsWith('image/');
 
-        console.log(`Processing allowed request from origin: ${requestOrigin}, mimeType: ${mimeType}, data length: ${base64Data.length}`);
+        console.log(`Processing allowed request from origin: ${requestOrigin}, mimeType: ${mimeType}, data length: ${base64Data.length}, isVideo: ${isVideo}, isVideoFrame: ${isVideoFrame}`);
+
+        // Add special handling for video frames
+        let effectiveSystemInstructions = systemInstructions;
+        
+        if (isVideoFrame) {
+            // Add special instructions for when we're processing a video frame instead of the full video
+            effectiveSystemInstructions = `${systemInstructions}\n\nIMPORTANT ADDITIONAL CONTEXT: Due to technical limitations with processing large videos, you are being provided with a representative screenshot from the video rather than the full video file. Please describe this frame as thoroughly as possible, focusing on the visual content, and make it clear that this is describing a single moment from a video rather than the complete video content. You should begin your response with "Video screenshot showing..." rather than just "Video showing..." to clarify this limitation to the user.`;
+        }
 
         // --- Call Gemini API ---
         const geminiRequestBody = {
           contents: [{
             parts: [
-              { text: systemInstructions },
+              { text: effectiveSystemInstructions },
               { inline_data: { mime_type: mimeType, data: base64Data } }
             ]
-          }]
-          // Add safetySettings or generationConfig if needed
-          // safetySettings: [...]
-          // generationConfig: {...}
+          }],
+          generationConfig: {
+            temperature: 0.2, // Lower temperature for more deterministic output
+            maxOutputTokens: 2048, // Allow for longer descriptions if needed
+            topP: 0.95,
+            topK: 64
+          }
         };
 
         console.log('Calling Gemini API...');
@@ -258,9 +273,17 @@ functions.http('generateAltTextProxy', async (req, res) => {
           return res.status(500).json({ error: 'Failed to parse response from AI service' });
         }
 
+        // For video frames, ensure the user knows this was an optimization
+        let finalText = generatedText.trim();
+        
+        if (isVideoFrame && !finalText.toLowerCase().startsWith("video screenshot")) {
+            // Add a prefix if Gemini didn't use our suggested format
+            finalText = "Video screenshot showing " + finalText.charAt(0).toLowerCase() + finalText.slice(1);
+        }
+
         console.log('Successfully generated alt text for allowed origin.');
         // Send successful response back to the extension
-        res.status(200).json({ altText: generatedText.trim() });
+        res.status(200).json({ altText: finalText });
 
     } catch (error) {
         console.error('Error processing request:', error);

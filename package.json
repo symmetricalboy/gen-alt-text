@@ -1,8 +1,8 @@
 {
   "name": "bluesky-alt-text",
-  "description": "Automatically generate accessible alt text for images on Bluesky using Google Gemini AI.",
+  "description": "Automatically generate detailed, accessible alt text for your Bluesky images & videos using Google Gemini AI.",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",

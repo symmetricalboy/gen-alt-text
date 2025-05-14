@@ -155,6 +155,14 @@ export default defineContentScript({
           console.log('[getMediaSource] Source is a Blob URL, converting to Data URL...');
           const response = await fetch(src);
           const blob = await response.blob();
+          
+          // For large videos, we'll use a more efficient approach
+          if (mediaElement instanceof HTMLVideoElement && blob.size > 5000000) { // 5MB threshold
+            console.log('[getMediaSource] Large video detected, using efficient processing');
+            // Just return the blob URL - we'll let the background script handle fetching directly
+            return src;
+          }
+          
           return new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onloadend = () => resolve(reader.result as string);
@@ -288,6 +296,29 @@ export default defineContentScript({
 
         button.textContent = 'Processing Media...';
         button.style.color = '#000000'; 
+        
+        // Check if this is a large video that might cause issues
+        const isVideo = mediaElement.tagName === 'VIDEO';
+        let isLargeVideo = false;
+        
+        if (isVideo) {
+          try {
+            // Estimate video size based on duration and dimensions
+            const duration = mediaElement instanceof HTMLVideoElement ? mediaElement.duration : 0;
+            const width = mediaElement.videoWidth || mediaElement.clientWidth;
+            const height = mediaElement.videoHeight || mediaElement.clientHeight;
+            
+            // Heuristic to detect potentially problematic videos
+            if (duration > 15 || (width * height > 1000000 && duration > 5)) { // > 15s or (> 1MP and > 5s)
+              isLargeVideo = true;
+              console.log('[generateAltText] Large video detected, using optimized processing');
+              createToast('Processing large video. This may take a moment...', 'info');
+            }
+          } catch (e) {
+            console.error('[generateAltText] Error checking video size:', e);
+          }
+        }
+        
         // Get the media source URL (could be data:, blob: converted to data:, or http(s):)
         const mediaSource = await getMediaSource(mediaElement); 
 
@@ -303,7 +334,6 @@ export default defineContentScript({
              return;
         }
         
-        const isVideo = mediaElement.tagName === 'VIDEO';
         console.log(`[generateAltText] Got ${isVideo ? 'Video' : 'Image'} source (type: ${mediaSource.substring(0, mediaSource.indexOf(':'))}, length: ${mediaSource.length})`);
 
         try {
@@ -368,9 +398,15 @@ export default defineContentScript({
               }
             });
 
+            // For large videos, send a special flag to let background script know
+            // this needs special handling
             console.log('[generateAltText] Sending message...');
-            // Send mediaUrl instead of imageUrl
-            port.postMessage({ action: 'generateAltText', mediaUrl: mediaSource, isVideo: isVideo }); 
+            port.postMessage({ 
+              action: 'generateAltText', 
+              mediaUrl: mediaSource, 
+              isVideo: isVideo,
+              isLargeVideo: isLargeVideo // Add flag for large videos
+            }); 
             console.log('[generateAltText] Message sent.');
 
           } catch (error: unknown) {
@@ -379,10 +415,8 @@ export default defineContentScript({
             
             // Check for message length exceeded error
             if (error instanceof Error && error.message.includes('Message length exceeded maximum allowed length')) {
-              errorMessage = 'Condensing...';
-              createToast('The alt text was too long. It will be automatically condensed for better quality.', 'info');
-              // Don't reset the button here, as we'll wait for the condensed result
-              return; // Return early so we don't reset the button
+              errorMessage = 'Video Too Large';
+              createToast('The video is too large to process directly. Please try a shorter clip or a still image.', 'error');
             }
             
             button.textContent = errorMessage;

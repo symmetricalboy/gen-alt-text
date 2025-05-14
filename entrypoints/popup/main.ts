@@ -7,7 +7,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     </div>
     <h1>Bluesky Alt Text Generator</h1>
     <div class="description">
-      Automatically generate detailed, accessible alt text for your Bluesky images using Google Gemini AI.
+      Automatically generate detailed, accessible alt text for your Bluesky images & videos using Google Gemini AI.
     </div>
     
     <div class="info-section">
