@@ -761,10 +761,10 @@ export default defineContentScript({
         marginRight: '6px'
       });
       
-      // Clear existing content and add icon and text
-      button.innerHTML = ''; // Clear any previous textContent
-      button.appendChild(icon);
-      button.appendChild(document.createTextNode('Generate Captions'));
+      const buttonTextNode = document.createTextNode('Generate Captions');
+      button.innerHTML = ''; 
+      button.appendChild(icon.cloneNode(true)); // Append a clone of the icon
+      button.appendChild(buttonTextNode);
       
       button.setAttribute('aria-label', 'Generate captions using AI');
       button.setAttribute('role', 'button');
@@ -848,8 +848,8 @@ export default defineContentScript({
         const button = document.getElementById(CAPTION_BUTTON_ID);
         if (!button) return;
         
-        const originalButtonText = button.textContent;
-        button.textContent = 'Processing...';
+        const originalButtonText = 'Generate Captions'; // Explicitly the text string
+        button.textContent = 'Processing...'; // This can stay as it's temporary
         button.setAttribute('disabled', 'true');
         button.style.opacity = '0.7';
         
@@ -938,7 +938,20 @@ export default defineContentScript({
         // Function to reset the button state
         function resetButton() {
           if (!button) return;
-          button.textContent = originalButtonText;
+          
+          button.innerHTML = ''; // Clear current content
+          const resetIcon = document.createElement('img');
+          try {
+            resetIcon.src = browser.runtime.getURL(iconUrl); // iconUrl is from the module scope
+          } catch (e) {
+            console.error('[generateCaptions.resetButton] Error getting icon URL:', e);
+          }
+          resetIcon.alt = 'AI';
+          Object.assign(resetIcon.style, { width: '16px', height: '16px', marginRight: '6px' });
+          
+          button.appendChild(resetIcon.cloneNode(true)); // Append a clone of the icon
+          button.appendChild(document.createTextNode(originalButtonText)); // Append the original text
+          
           button.removeAttribute('disabled');
           button.style.opacity = '1';
         }
@@ -949,7 +962,19 @@ export default defineContentScript({
         // Reset button state
         const button = document.getElementById(CAPTION_BUTTON_ID);
         if (button) {
-          button.textContent = 'Generate Captions';
+          button.innerHTML = ''; // Clear current content
+          const errorIcon = document.createElement('img');
+          try {
+            errorIcon.src = browser.runtime.getURL(iconUrl);
+          } catch (e) {
+            console.error('[generateCaptions.catch] Error getting icon URL:', e);
+          }
+          errorIcon.alt = 'AI';
+          Object.assign(errorIcon.style, { width: '16px', height: '16px', marginRight: '6px' });
+          
+          button.appendChild(errorIcon.cloneNode(true)); // Append a clone of the icon
+          button.appendChild(document.createTextNode('Generate Captions')); // Append the original text
+          
           button.removeAttribute('disabled');
           button.style.opacity = '1';
         }
