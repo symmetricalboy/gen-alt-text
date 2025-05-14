@@ -10,6 +10,20 @@ This browser extension helps you generate detailed, accessible alt text for imag
 *   **Supports Images & Videos:** Can generate alt text based on the content of both image and video uploads.
 *   **Toast Notifications:** Displays a confirmation message after generation, reminding you to review the text.
 *   **Privacy-Focused:** Media processing happens via the secure Google AI API.
+*   **Web App Available:** If you don't want to install an extension, you can use the [web app](https://alttext.symm.app) to generate alt text for any media.
+
+## Web Application
+
+We also offer a simple web application that you can use from any device:
+
+**[https://alttext.symm.app](https://alttext.symm.app)**
+
+The web app allows you to:
+- Upload images or videos (up to 5MB)
+- Generate AI-powered alt text
+- Copy the results to your clipboard
+
+No installation required - just visit the site and start generating accessible alt text!
 
 ## Installation
 
@@ -48,3 +62,9 @@ This project is licensed under the MIT License - see the [LICENSE](./LICENSE) fi
 ## Feedback
 
 Feedback, suggestions, and assistance are welcome at [@symm.app on Bluesky](https://bsky.app/profile/symm.app). 
+
+
+I need to revise this documentation extensively, but the extension is working as expected. You can build it yourself in its entirety, by running:
+```cmd
+npm install && npx wxt build -b chrome --mv3 && npx wxt zip -b chrome --mv3 && npx wxt build -b firefox --mv2 && npx wxt zip -b firefox --mv2
+```

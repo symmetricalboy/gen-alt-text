@@ -22,7 +22,10 @@ export default defineBackground(() => {
   
   // Get Cloud Function URL from environment variables (set via wxt.config.ts)
   const CLOUD_FUNCTION_URL = import.meta.env.VITE_CLOUD_FUNCTION_URL;
-
+  
+  // Maximum length for alt text to avoid "Message length exceeded maximum allowed length" error
+  const MAX_ALT_TEXT_LENGTH = 2000;
+  
   if (!CLOUD_FUNCTION_URL || CLOUD_FUNCTION_URL === 'YOUR_FUNCTION_URL_HERE') {
     console.error(
       'VITE_CLOUD_FUNCTION_URL is not configured or is set to the placeholder value. ' +
@@ -125,7 +128,15 @@ export default defineBackground(() => {
 
         if (responseData && typeof responseData.altText === 'string') {
             // console.log('Received alt text from proxy:', responseData.altText);
-            return { altText: responseData.altText };
+            
+            // Truncate alt text if it exceeds the maximum length
+            let altText = responseData.altText;
+            if (altText.length > MAX_ALT_TEXT_LENGTH) {
+              console.warn(`Alt text exceeds maximum length (${altText.length} > ${MAX_ALT_TEXT_LENGTH}), truncating...`);
+              altText = altText.substring(0, MAX_ALT_TEXT_LENGTH - 3) + '...';
+            }
+            
+            return { altText: altText };
         } else {
             console.error('Unexpected successful response format from proxy:', responseData);
             return { error: 'Received invalid response format from proxy service.' };

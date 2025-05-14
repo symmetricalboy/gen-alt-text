@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Alt Text Generator | Symm</title>
+    <link rel="icon" href="public/icons/favicon.ico" type="image/x-icon">
+    <style>
+        :root {
+            --primary-color: #1da882;
+            --primary-hover: #18866a;
+            --secondary-color: #007eda;
+            --dark-color: #333;
+            --light-color: #f8f9fa;
+            --border-color: #ddd;
+            --error-color: #e53935;
+        }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            line-height: 1.6;
+            color: var(--dark-color);
+            background-color: var(--light-color);
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        h1 {
+            color: var(--primary-color);
+            margin-bottom: 0.5rem;
+        }
+        
+        .subtitle {
+            color: #666;
+            font-size: 1.1rem;
+        }
+        
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+        
+        @media (min-width: 768px) {
+            .container {
+                flex-direction: row;
+            }
+        }
+        
+        .upload-section, .result-section {
+            flex: 1;
+            padding: 1.5rem;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        .upload-section {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .upload-area {
+            border: 2px dashed var(--border-color);
+            border-radius: 6px;
+            padding: 2rem;
+            text-align: center;
+            cursor: pointer;
+            margin-bottom: 1.5rem;
+            transition: border-color 0.3s;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .upload-area:hover, .upload-area.highlight {
+            border-color: var(--secondary-color);
+        }
+        
+        .upload-icon {
+            font-size: 3rem;
+            color: var(--secondary-color);
+            margin-bottom: 1rem;
+        }
+        
+        .preview-container {
+            max-width: 100%;
+            margin-top: 1.5rem;
+            text-align: center;
+        }
+        
+        #preview {
+            max-width: 100%;
+            max-height: 300px;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        button {
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            font-size: 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            font-weight: 500;
+        }
+        
+        button:hover {
+            background-color: var(--primary-hover);
+        }
+        
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        
+        .btn-secondary {
+            background-color: var(--secondary-color);
+        }
+        
+        .btn-secondary:hover {
+            background-color: #0069b9;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            margin-right: 10px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .result-section h2 {
+            margin-bottom: 1rem;
+            color: var(--primary-color);
+        }
+        
+        .result-box {
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 1rem;
+            min-height: 200px;
+            margin-bottom: 1rem;
+            white-space: pre-wrap;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 16px;
+            border-radius: 6px;
+            color: white;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            z-index: 1000;
+            animation: fadeIn 0.3s, fadeOut 0.3s 2.7s;
+            opacity: 0;
+        }
+        
+        .toast.success {
+            background-color: var(--primary-color);
+        }
+        
+        .toast.error {
+            background-color: var(--error-color);
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        @keyframes fadeOut {
+            from { opacity: 1; }
+            to { opacity: 0; }
+        }
+        
+        footer {
+            margin-top: 3rem;
+            text-align: center;
+            color: #666;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>AI Alt Text Generator</h1>
+        <p class="subtitle">Upload an image or video to generate accessible alt text using AI</p>
+    </header>
+    
+    <main class="container">
+        <section class="upload-section">
+            <label for="file-input" class="upload-area" id="drop-area">
+                <div class="upload-icon">📷</div>
+                <h3>Upload Media</h3>
+                <p>Drag & drop an image/video here or click to browse</p>
+                <input type="file" id="file-input" accept="image/*,video/*" style="display: none;">
+            </label>
+            
+            <div class="preview-container" style="display: none;">
+                <h3>Preview</h3>
+                <!-- Preview will be inserted here -->
+            </div>
+            
+            <button id="generate-btn" disabled>Generate Alt Text</button>
+        </section>
+        
+        <section class="result-section">
+            <h2>Generated Alt Text</h2>
+            <div class="result-box" id="result">
+                <p style="color: #666;">Generated alt text will appear here...</p>
+            </div>
+            
+            <div class="button-group">
+                <button id="copy-btn" class="btn-secondary" disabled>Copy to Clipboard</button>
+            </div>
+        </section>
+    </main>
+    
+    <footer>
+        <p>© 2024 Symm. This tool uses AI to generate alt text for accessibility purposes. Always review AI-generated content before using.</p>
+        <p>Also available as a <a href="https://github.com/symme-dev/gen-alt-text" target="_blank">browser extension</a>!</p>
+    </footer>
+    
+    <script>
+        // Constants
+        const CLOUD_FUNCTION_URL = 'https://us-central1-symm-gemini.cloudfunctions.net/generateAltTextProxy';
+        const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+        
+        // DOM Elements
+        const fileInput = document.getElementById('file-input');
+        const dropArea = document.getElementById('drop-area');
+        const previewContainer = document.querySelector('.preview-container');
+        const generateBtn = document.getElementById('generate-btn');
+        const resultBox = document.getElementById('result');
+        const copyBtn = document.getElementById('copy-btn');
+        
+        // Current file data
+        let currentFile = null;
+        let currentMediaElement = null;
+        
+        // Event Listeners
+        fileInput.addEventListener('change', handleFileSelect);
+        
+        // Drag and drop events
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropArea.addEventListener(eventName, preventDefaults, false);
+        });
+        
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropArea.addEventListener(eventName, highlight, false);
+        });
+        
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropArea.addEventListener(eventName, unhighlight, false);
+        });
+        
+        function highlight() {
+            dropArea.classList.add('highlight');
+        }
+        
+        function unhighlight() {
+            dropArea.classList.remove('highlight');
+        }
+        
+        dropArea.addEventListener('drop', handleDrop, false);
+        
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            
+            if (files.length > 0) {
+                fileInput.files = files;
+                handleFileSelect();
+            }
+        }
+        
+        generateBtn.addEventListener('click', generateAltText);
+        copyBtn.addEventListener('click', copyToClipboard);
+        
+        // File handling
+        function handleFileSelect() {
+            const file = fileInput.files[0];
+            
+            if (!file) return;
+            
+            if (file.size > MAX_FILE_SIZE) {
+                showToast('File is too large. Maximum size is 5MB.', 'error');
+                return;
+            }
+            
+            currentFile = file;
+            
+            // Clear previous preview
+            previewContainer.innerHTML = '<h3>Preview</h3>';
+            
+            // Create appropriate preview
+            if (file.type.startsWith('image/')) {
+                const img = document.createElement('img');
+                img.id = 'preview';
+                img.file = file;
+                previewContainer.appendChild(img);
+                currentMediaElement = img;
+                
+                const reader = new FileReader();
+                reader.onload = (e) => { img.src = e.target.result; };
+                reader.readAsDataURL(file);
+            } else if (file.type.startsWith('video/')) {
+                const video = document.createElement('video');
+                video.id = 'preview';
+                video.controls = true;
+                video.muted = true;
+                previewContainer.appendChild(video);
+                currentMediaElement = video;
+                
+                const reader = new FileReader();
+                reader.onload = (e) => { video.src = e.target.result; };
+                reader.readAsDataURL(file);
+            }
+            
+            previewContainer.style.display = 'block';
+            generateBtn.disabled = false;
+            
+            // Reset result
+            resultBox.innerHTML = '<p style="color: #666;">Click "Generate Alt Text" to analyze this media...</p>';
+            copyBtn.disabled = true;
+        }
+        
+        // Generate alt text
+        async function generateAltText() {
+            if (!currentFile) return;
+            
+            // Show loading state
+            const originalBtnText = generateBtn.innerHTML;
+            generateBtn.innerHTML = '<span class="loading"></span>Generating...';
+            generateBtn.disabled = true;
+            
+            try {
+                // Convert to base64
+                const base64Data = await fileToBase64(currentFile);
+                const mimeType = currentFile.type;
+                
+                // Call the proxy function
+                const response = await fetch(CLOUD_FUNCTION_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        base64Data, 
+                        mimeType
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.error || 'Error generating alt text');
+                }
+                
+                if (data.altText) {
+                    resultBox.textContent = data.altText;
+                    copyBtn.disabled = false;
+                    showToast('Alt text generated successfully!', 'success');
+                } else {
+                    throw new Error('No alt text received from the server');
+                }
+            } catch (error) {
+                console.error('Error generating alt text:', error);
+                resultBox.innerHTML = `<p style="color: var(--error-color);">Error: ${error.message}</p>`;
+                showToast(error.message, 'error');
+            } finally {
+                // Restore button
+                generateBtn.innerHTML = originalBtnText;
+                generateBtn.disabled = false;
+            }
+        }
+        
+        // Helper function to convert file to base64
+        function fileToBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = () => {
+                    const result = reader.result;
+                    // Extract the base64 part without the prefix
+                    const base64 = result.split(',')[1];
+                    resolve(base64);
+                };
+                reader.onerror = error => reject(error);
+            });
+        }
+        
+        // Copy to clipboard
+        function copyToClipboard() {
+            const text = resultBox.textContent;
+            if (!text) return;
+            
+            navigator.clipboard.writeText(text)
+                .then(() => {
+                    showToast('Copied to clipboard!', 'success');
+                })
+                .catch(err => {
+                    console.error('Could not copy text: ', err);
+                    showToast('Failed to copy to clipboard', 'error');
+                });
+        }
+        
+        // Show toast notification
+        function showToast(message, type = 'success') {
+            // Remove any existing toasts
+            const existingToast = document.querySelector('.toast');
+            if (existingToast) {
+                existingToast.remove();
+            }
+            
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            
+            // Force reflow
+            void toast.offsetWidth;
+            
+            // Apply styles to make visible
+            toast.style.opacity = '1';
+            
+            // Remove after 3 seconds
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => {
+                    if (toast.parentNode) {
+                        toast.parentNode.removeChild(toast);
+                    }
+                }, 300);
+            }, 3000);
+        }
+    </script>
+</body>
+</html> 

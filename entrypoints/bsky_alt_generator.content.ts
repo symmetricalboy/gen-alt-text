@@ -81,26 +81,30 @@ export default defineContentScript({
         'video source[src]'
       ];
 
+      // Array to collect all visible media elements
+      const visibleElements: (HTMLImageElement | HTMLVideoElement)[] = [];
+
       for (const selector of selectors) {
-          const element = container.querySelector<HTMLImageElement | HTMLVideoElement | HTMLSourceElement>(selector);
+          // Get all matching elements instead of just the first one
+          const elements = container.querySelectorAll<HTMLImageElement | HTMLVideoElement | HTMLSourceElement>(selector);
           
-          if (element instanceof HTMLSourceElement) {
-              const videoParent = element.closest('video');
-              if (videoParent && isElementVisible(videoParent)) {
-                  console.log(`[findMediaElement - Simplified] Found video via source selector: ${selector}`, videoParent);
-                  return videoParent;
-              } else {
-                  // console.warn(`[findMediaElement - Simplified] Found source tag but parent video hidden/invalid: ${selector}`, element);
+          elements.forEach(element => {
+              if (element instanceof HTMLSourceElement) {
+                  const videoParent = element.closest('video');
+                  if (videoParent && isElementVisible(videoParent) && !visibleElements.includes(videoParent)) {
+                      visibleElements.push(videoParent);
+                  }
+              } else if (element && isElementVisible(element) && !visibleElements.includes(element)) {
+                  visibleElements.push(element);
               }
-              continue; 
-          }
-          
-          if (element && isElementVisible(element)) {
-              console.log(`[findMediaElement - Simplified] Found media via direct selector: ${selector}`, element);
-              return element; 
-          } else if (element) {
-              // console.warn(`[findMediaElement - Simplified] Media found but hidden/too small with selector: ${selector}`, element);
-          }
+          });
+      }
+
+      if (visibleElements.length > 0) {
+          // Select the LAST media element (most likely the one being added in a reply)
+          const lastElement = visibleElements[visibleElements.length - 1];
+          console.log(`[findMediaElement - Simplified] Found ${visibleElements.length} media elements, using the last one:`, lastElement);
+          return lastElement;
       }
 
       console.error('[findMediaElement - Simplified] FAILED: No suitable media found using direct selectors.');
@@ -371,7 +375,15 @@ export default defineContentScript({
 
           } catch (error: unknown) {
             console.error('[generateAltText] Connect/Post error:', error);
-            button.textContent = 'Connect Error';
+            let errorMessage = 'Connect Error';
+            
+            // Check for message length exceeded error
+            if (error instanceof Error && error.message.includes('Message length exceeded maximum allowed length')) {
+              errorMessage = 'Text Too Long';
+              createToast('The generated alt text was too long. It has been truncated.', 'warning');
+            }
+            
+            button.textContent = errorMessage;
             button.style.color = '#000000'; 
             setTimeout(() => { 
                 button.innerHTML = originalButtonContent; 

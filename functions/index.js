@@ -16,11 +16,22 @@ const ALLOWED_CHROME_ORIGIN = 'chrome-extension://bdgpkmjnfildfjhpjagjibfnfpdied
 const ALLOWED_CHROME_ORIGIN_PREFIX = 'chrome-extension://';
 const ALLOWED_SAFARI_ORIGIN_PREFIX = 'safari-web-extension://';
 const ALLOWED_FIREFOX_ORIGIN_PREFIX = 'moz-extension://';
+// Web app domains
+const ALLOWED_WEB_APP_ORIGIN = 'https://alttext.symm.app';
+// Local development origins
+const ALLOWED_LOCAL_ORIGINS = [
+    'http://localhost:8080',
+    'http://localhost:3000', 
+    'http://127.0.0.1:8080',
+    'http://127.0.0.1:3000'
+];
 // ---
 
 // List of fully allowed origins (for precise matching)
 const allowedFullOrigins = [
-    ALLOWED_CHROME_ORIGIN
+    ALLOWED_CHROME_ORIGIN,
+    ALLOWED_WEB_APP_ORIGIN,
+    ...ALLOWED_LOCAL_ORIGINS
     // Add other specific origins if needed, e.g., for testing environments
 ];
 
