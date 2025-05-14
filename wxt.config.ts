@@ -35,8 +35,8 @@ export default defineConfig({
     
     // Permissions needed
     permissions: [
-      'activeTab',     // Can be useful for context, but might not be strictly necessary depending on approach
-      'scripting',     // Required to inject content scripts
+      // 'activeTab',     // Can be useful for context, but might not be strictly necessary depending on approach
+      // 'scripting',     // Required to inject content scripts
       // 'contextMenus', // If adding a right-click menu item later
       // 'alarms',      // If needing scheduled tasks
     ],
