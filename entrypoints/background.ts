@@ -138,82 +138,28 @@ export default defineBackground(() => {
   
   // Helper function to optimize video processing by extracting frames
   async function optimizedVideoProcessing(videoBlob: Blob, mimeType: string): Promise<{ base64Data: string; mimeType: string }> {
-      return new Promise((resolve, reject) => {
-          try {
-              // Create a video element to load the blob
-              const video = document.createElement('video');
-              video.muted = true;
-              video.autoplay = false;
-              video.controls = false;
-              
-              // Create object URL from the blob
-              const objectUrl = URL.createObjectURL(videoBlob);
-              
-              // Set up event handlers
-              video.onloadedmetadata = () => {
-                  console.log(`[optimizedVideoProcessing] Video metadata loaded: ${video.videoWidth}x${video.videoHeight}, duration: ${video.duration}s`);
-                  
-                  // Seek to 20% into the video for a representative frame
-                  const seekTime = Math.min(video.duration * 0.2, 3); // 20% or 3 seconds, whichever is less
-                  video.currentTime = seekTime;
-              };
-              
-              video.onseeked = () => {
-                  try {
-                      // Create canvas to capture the frame
-                      const canvas = document.createElement('canvas');
-                      const ctx = canvas.getContext('2d');
-                      
-                      if (!ctx) {
-                          throw new Error('Failed to get canvas 2D context');
-                      }
-                      
-                      // Set canvas size to match video dimensions
-                      canvas.width = video.videoWidth;
-                      canvas.height = video.videoHeight;
-                      
-                      // Draw the current video frame to the canvas
-                      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                      
-                      // Get the data URL from the canvas (this is a JPEG frame from the video)
-                      const frameDataUrl = canvas.toDataURL('image/jpeg', 0.85);
-                      
-                      // Clean up
-                      URL.revokeObjectURL(objectUrl);
-                      
-                      // Extract base64 data from data URL
-                      const base64Match = frameDataUrl.match(/^data:(.+?);base64,(.*)$/);
-                      if (!base64Match || base64Match.length < 3) {
-                          throw new Error('Failed to extract base64 data from frame');
-                      }
-                      
-                      // Return the frame data instead of the full video
-                      resolve({
-                          base64Data: base64Match[2],
-                          mimeType: base64Match[1], // This will be image/jpeg
-                      });
-                      
-                      console.log('[optimizedVideoProcessing] Successfully extracted and processed video frame');
-                  } catch (frameError) {
-                      console.error('[optimizedVideoProcessing] Error extracting frame:', frameError);
-                      reject(frameError);
-                  }
-              };
-              
-              video.onerror = (e) => {
-                  console.error('[optimizedVideoProcessing] Error loading video:', e);
-                  URL.revokeObjectURL(objectUrl);
-                  reject(new Error('Failed to load video for processing'));
-              };
-              
-              // Start loading the video
-              video.src = objectUrl;
-              
-          } catch (setupError) {
-              console.error('[optimizedVideoProcessing] Setup error:', setupError);
-              reject(setupError);
+      // Since document is not available in background scripts, we can't use DOM elements
+      // Instead, for large videos, we'll just convert the blob directly
+      try {
+          console.log('[optimizedVideoProcessing] Processing video using direct method (no DOM access)');
+          
+          // Simple fallback: just convert the blob to base64 directly
+          const dataUrl = await blobToDataURL(videoBlob);
+          
+          // Extract the base64 data
+          const parts = dataUrl.match(/^data:(.+?);base64,(.*)$/);
+          if (!parts || parts.length < 3) {
+              throw new Error('Failed to extract base64 data from video blob');
           }
-      });
+          
+          return {
+              base64Data: parts[2],
+              mimeType: parts[1]
+          };
+      } catch (error) {
+          console.error('[optimizedVideoProcessing] Error processing video:', error);
+          throw error;
+      }
   }
 
   // --- Alt Text Generation Logic (Modified to call Proxy) ---

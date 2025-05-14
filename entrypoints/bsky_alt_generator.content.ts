@@ -153,22 +153,22 @@ export default defineContentScript({
           return src;
         } else if (src.startsWith('blob:')) {
           console.log('[getMediaSource] Source is a Blob URL, converting to Data URL...');
-          const response = await fetch(src);
-          const blob = await response.blob();
-          
-          // For large videos, we'll use a more efficient approach
-          if (mediaElement instanceof HTMLVideoElement && blob.size > 5000000) { // 5MB threshold
-            console.log('[getMediaSource] Large video detected, using efficient processing');
-            // Just return the blob URL - we'll let the background script handle fetching directly
-            return src;
+          try {
+            const response = await fetch(src);
+            const blob = await response.blob();
+            
+            // For large videos, we'll still convert to data URL in the content script
+            // since document is available here, but not in the background script
+            return new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            });
+          } catch (fetchError) {
+            console.error('[getMediaSource] Error fetching or converting blob URL:', fetchError);
+            throw new Error(`Failed to process blob URL: ${fetchError instanceof Error ? fetchError.message : fetchError}`);
           }
-          
-          return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result as string);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-          });
         } else if (src.startsWith('http:') || src.startsWith('https:')) {
           // Return the HTTP(S) URL directly for the background script to handle
           console.log('[getMediaSource] Source is an HTTP(S) URL:', src);
