@@ -46,7 +46,7 @@ const ALLOWED_LOCAL_ORIGINS = [
 const allowedFullOrigins = [
     ALLOWED_CHROME_ORIGIN,
     ALLOWED_WEB_APP_ORIGIN,
-    ...ALLOWED_LOCAL_ORIGINS
+    ...ALLOWED_LOCAL_ORIGINS,
     // Add other specific origins if needed, e.g., for testing environments
 ];
 
@@ -62,8 +62,7 @@ const allowedPrefixes = [
 // TODO: Add your actual system instructions back here if they are not included below
 const systemInstructions = `You will be provided with visual media (either a still image or a video file). Your task is to generate alternative text (alt-text) that describes the media's content and context. This alt-text is intended for use with screen reader technology, assisting individuals who are blind or visually impaired to understand the visual information. Adhere to the following guidelines strictly:
 
-1.  **Media Type Identification:**
-    *   Begin by identifying the type of media. For images, note if it is a "photograph", "painting", "illustration", "diagram", "screenshot", "comic panel", etc. For videos, start the description with "Video describing...".
+1.  **Media Type Identification:**    *   Begin by identifying the type of media. For images, note if it is a "photograph", "painting", "illustration", "diagram", "screenshot", "comic panel", etc. For videos, simply describe the content directly without prefacing with "Video describing...".
 
 2.  **Content and Purpose:**
     *   Describe the visual content accurately and thoroughly. Explain the media in the context that it is presented.
@@ -125,6 +124,18 @@ functions.http('generateAltTextProxy', async (req, res) => {
                     allowedOriginForCors = requestOrigin; // Reflect the specific requesting origin
                     break; // Stop checking prefixes once one matches
                 }
+            }
+            
+            // Allow any extension origin (for debugging/development)
+            // This is less secure but helps during development
+            if (!originAllowed && (
+                requestOrigin.startsWith('chrome-extension://') || 
+                requestOrigin.startsWith('moz-extension://') || 
+                requestOrigin.startsWith('safari-web-extension://')
+            )) {
+                console.log(`Allowing extension origin: ${requestOrigin}`);
+                originAllowed = true;
+                allowedOriginForCors = requestOrigin;
             }
         }
     }
@@ -388,8 +399,7 @@ In a real implementation, we would analyze the actual video.`;
         let effectiveSystemInstructions = systemInstructions;
         
         if (isVideoFrame) {
-            // Add special instructions for when we're processing a video frame instead of the full video
-            effectiveSystemInstructions = `${systemInstructions}\n\nIMPORTANT ADDITIONAL CONTEXT: Due to technical limitations with processing large videos, you are being provided with a representative screenshot from the video rather than the full video file. Please describe this frame as thoroughly as possible, focusing on the visual content, and make it clear that this is describing a single moment from a video rather than the complete video content. You should begin your response with "Video screenshot showing..." rather than just "Video showing..." to clarify this limitation to the user.`;
+            // Add special instructions for when we're processing a video frame instead of the full video            effectiveSystemInstructions = `${systemInstructions}\n\nIMPORTANT ADDITIONAL CONTEXT: Due to technical limitations with processing large videos, you are being provided with a representative screenshot from the video rather than the full video file. Please describe this frame as thoroughly as possible, focusing on the visual content, and make it clear that this is describing a single moment from a video rather than the complete video content. Begin your description with "A frame from a video showing..." to clarify this limitation to the user.`;
         }
 
         // --- Call Gemini API ---
@@ -433,13 +443,7 @@ In a real implementation, we would analyze the actual video.`;
           return res.status(500).json({ error: 'Failed to parse response from AI service' });
         }
 
-        // For video frames, ensure the user knows this was an optimization
-        let finalText = generatedText.trim();
-        
-        if (isVideoFrame && !finalText.toLowerCase().startsWith("video screenshot")) {
-            // Add a prefix if Gemini didn't use our suggested format
-            finalText = "Video screenshot showing " + finalText.charAt(0).toLowerCase() + finalText.slice(1);
-        }
+        // For video frames, ensure the user knows this was an optimization        let finalText = generatedText.trim();                if (isVideoFrame && !finalText.toLowerCase().startsWith("a frame from a video")) {            // Add a prefix if Gemini didn't use our suggested format            finalText = "A frame from a video showing " + finalText.charAt(0).toLowerCase() + finalText.slice(1);        }
 
         console.log('Successfully generated alt text for allowed origin.');
         // Send successful response back to the extension

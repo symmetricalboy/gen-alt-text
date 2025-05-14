@@ -181,6 +181,7 @@ export default defineBackground(() => {
         const timeoutId = setTimeout(() => controller.abort(), timeoutDuration);
         
         try {
+          console.log('Sending request to Cloud Function:', CLOUD_FUNCTION_URL);
           const proxyResponse = await fetch(CLOUD_FUNCTION_URL, {
               method: 'POST',
               headers: {
@@ -193,13 +194,27 @@ export default defineBackground(() => {
           clearTimeout(timeoutId);
           
           // 4. Handle the Response
-          const responseData = await proxyResponse.json();
-
           if (!proxyResponse.ok) {
-              console.error('Proxy function returned an error:', proxyResponse.status, responseData);
-              const errorMsg = responseData?.error || proxyResponse.statusText || `Proxy request failed with status ${proxyResponse.status}`;
-              return { error: `AI Proxy Error: ${errorMsg}` };
+            console.error('Proxy function returned an error:', proxyResponse.status, proxyResponse.statusText);
+            let errorMsg = '';
+            
+            // Handle specific HTTP status codes
+            if (proxyResponse.status === 403) {
+              errorMsg = 'Access denied by the server. This is likely a CORS (Cross-Origin Resource Sharing) issue. The server needs to allow this extension to connect to it.';
+              console.error('CORS issue detected: 403 Forbidden response from Cloud Function');
+            } else {
+              try {
+                const responseData = await proxyResponse.json();
+                errorMsg = responseData?.error || proxyResponse.statusText || `Proxy request failed with status ${proxyResponse.status}`;
+              } catch (jsonError) {
+                errorMsg = `Request failed (${proxyResponse.status}): ${proxyResponse.statusText}`;
+              }
+            }
+            
+            return { error: errorMsg };
           }
+          
+          const responseData = await proxyResponse.json();
 
           if (responseData && typeof responseData.altText === 'string') {
               // console.log('Received alt text from proxy:', responseData.altText);
@@ -438,8 +453,23 @@ export default defineBackground(() => {
               
               if (!response.ok) {
                 console.error('Caption generation error:', response.status);
-                const errorText = await response.text();
-                throw new Error(`Failed to generate captions: ${response.status} - ${errorText}`);
+                
+                // Handle specific HTTP status codes
+                if (response.status === 403) {
+                  console.error('CORS issue detected: 403 Forbidden response from Cloud Function');
+                  port.postMessage({ 
+                    error: 'Access denied by the server. This is likely a CORS issue. The server needs to allow this extension to connect to it.'
+                  });
+                  return;
+                }
+                
+                // For other errors, try to get more details
+                try {
+                  const errorData = await response.json();
+                  throw new Error(errorData.error || `Failed to generate captions: ${response.status} - ${response.statusText}`);
+                } catch (jsonError) {
+                  throw new Error(`Failed to generate captions: ${response.status} - ${response.statusText}`);
+                }
               }
               
               const data = await response.json();

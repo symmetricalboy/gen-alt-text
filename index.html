@@ -448,7 +448,7 @@
                 
                 // Update status to show the API is processing
                 setTimeout(() => {
-                    resultBox.innerHTML = '<p style="color: #666;">AI service is processing your video. This may take several minutes for large files...</p>';
+                    resultBox.innerHTML = '<p style="color: #666;">AI service is processing your media. This may take several minutes for large files...</p>';
                 }, 3000);
                 
                 // Full video processing regardless of size
@@ -459,7 +459,12 @@
                     fileSize: currentFile.size
                 };
                 
-                                // Add video metadata that might help the server                if (currentFile.type.startsWith('video/') && currentMediaElement && currentMediaElement instanceof HTMLVideoElement) {                    requestBody.videoDuration = currentMediaElement.duration || 0;                    requestBody.videoWidth = currentMediaElement.videoWidth || 0;                    requestBody.videoHeight = currentMediaElement.videoHeight || 0;                }
+                // Add video metadata that might help the server
+                if (currentFile.type.startsWith('video/') && currentMediaElement && currentMediaElement instanceof HTMLVideoElement) {
+                    requestBody.videoDuration = currentMediaElement.duration || 0;
+                    requestBody.videoWidth = currentMediaElement.videoWidth || 0;
+                    requestBody.videoHeight = currentMediaElement.videoHeight || 0;
+                }
                 
                 console.log(`Sending ${(base64Data.length / (1024 * 1024)).toFixed(2)}MB of data to API...`);
                 

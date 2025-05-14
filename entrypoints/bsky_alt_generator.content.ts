@@ -73,16 +73,20 @@ export default defineContentScript({
           return rect.width > 0 && rect.height > 0 && (el as HTMLElement).offsetParent !== null;
       };
       
+      // Add stronger video-specific selectors first
       const selectors: string[] = [
-        '[data-testid="imagePreview"] img[src]', 
-        '[data-testid="images"] img[src]',
-        '[data-testid="videoPreview"] video[src]', 
+        // Video-specific selectors first for better video detection
+        '[data-testid="videoPreview"] video[src]',
         '[data-testid="videos"] video[src]',
         '[data-testid="videoPreview"] video source[src]',
         '[data-testid="videos"] video source[src]',
-        'img[src]:not([alt*="avatar" i]):not([src*="avatar"])', 
-        'video[src]', 
-        'video source[src]'
+        // More general video selectors
+        'video[src]',
+        'video source[src]',
+        // Image selectors
+        '[data-testid="imagePreview"] img[src]', 
+        '[data-testid="images"] img[src]',
+        'img[src]:not([alt*="avatar" i]):not([src*="avatar"])' 
       ];
 
       // Array to collect all visible media elements
@@ -96,22 +100,32 @@ export default defineContentScript({
               if (element instanceof HTMLSourceElement) {
                   const videoParent = element.closest('video');
                   if (videoParent && isElementVisible(videoParent) && !visibleElements.includes(videoParent)) {
+                      console.log('[findMediaElement] Found video via source element:', videoParent);
                       visibleElements.push(videoParent);
                   }
               } else if (element && isElementVisible(element) && !visibleElements.includes(element)) {
+                  console.log('[findMediaElement] Found media element:', element);
                   visibleElements.push(element);
               }
           });
       }
 
       if (visibleElements.length > 0) {
-          // Select the LAST media element (most likely the one being added in a reply)
+          // Prioritize video elements if any are found
+          const videoElements = visibleElements.filter(el => el instanceof HTMLVideoElement);
+          if (videoElements.length > 0) {
+              const video = videoElements[videoElements.length - 1];
+              console.log('[findMediaElement] Found video element:', video);
+              return video;
+          }
+          
+          // Otherwise, use the last element found (likely the most recently added)
           const lastElement = visibleElements[visibleElements.length - 1];
-          console.log(`[findMediaElement - Simplified] Found ${visibleElements.length} media elements, using the last one:`, lastElement);
+          console.log(`[findMediaElement] Found ${visibleElements.length} media elements, using the last one:`, lastElement);
           return lastElement;
       }
 
-      console.error('[findMediaElement - Simplified] FAILED: No suitable media found using direct selectors.');
+      console.error('[findMediaElement] FAILED: No suitable media found using direct selectors.');
       return null;
     };
 
@@ -950,33 +964,105 @@ export default defineContentScript({
 
     // Find video caption section in dialog
     const findCaptionSection = (): HTMLElement | null => {
-      // Look for the captions section header
-      const captionHeaders = Array.from(document.querySelectorAll('div.css-146c3p1')).filter(
+      // Try multiple approaches to find the caption section
+      
+      // Method 1: Look for the captions section header (standard approach)
+      const captionHeaders = Array.from(document.querySelectorAll('div')).filter(
         el => el.textContent?.includes('Captions') || el.textContent?.includes('.vtt')
       );
       
-      if (captionHeaders.length === 0) return null;
+      if (captionHeaders.length > 0) {
+        const captionHeader = captionHeaders[0];
+        const captionSection = captionHeader.closest('div[style*="flex-direction"]');
+        if (captionSection) {
+          console.log('[findCaptionSection] Found caption section via text content:', captionSection);
+          return captionSection as HTMLElement;
+        }
+      }
       
-      // Get the parent container of the caption section
-      const captionHeader = captionHeaders[0];
-      const captionSection = captionHeader.closest('div.css-175oi2r');
+      // Method 2: Look for the file input that accepts .vtt files
+      const vttInputs = document.querySelectorAll('input[type="file"][accept*=".vtt"]');
+      if (vttInputs.length > 0) {
+        const vttInput = vttInputs[0];
+        const captionSection = vttInput.closest('div[style*="flex-direction"]');
+        if (captionSection) {
+          console.log('[findCaptionSection] Found caption section via .vtt input:', captionSection);
+          return captionSection as HTMLElement;
+        }
+      }
       
-      console.log('[findCaptionSection] Found caption section:', captionSection);
-      return captionSection as HTMLElement;
+      // Method 3: Find a dialog that contains video controls and captions
+      const videoDialogs = document.querySelectorAll('[role="dialog"]');
+      for (const dialog of videoDialogs) {
+        // Check if this dialog has video-related content
+        const hasVideoContent = dialog.querySelector('video') != null;
+        if (hasVideoContent) {
+          // Look for caption-related elements in this dialog
+          const sections = dialog.querySelectorAll('div[style*="flex-direction"]');
+          for (const section of sections) {
+            if (section.textContent?.includes('Captions') || 
+                section.querySelector('input[type="file"]')) {
+              console.log('[findCaptionSection] Found caption section via video dialog:', section);
+              return section as HTMLElement;
+            }
+          }
+          
+          // If we found a video dialog but no caption section,
+          // return the dialog itself as a fallback for button insertion
+          console.log('[findCaptionSection] Found video dialog but no caption section, using dialog:', dialog);
+          return dialog as HTMLElement;
+        }
+      }
+      
+      console.log('[findCaptionSection] No caption section found');
+      return null;
     };
     
     // Function to add the generate captions button
     const addGenerateCaptionsButton = () => {
       // Find the captions section in the dialog
       const captionSection = findCaptionSection();
-      if (!captionSection) return;
+      if (!captionSection) {
+        console.log('[addGenerateCaptionsButton] No caption section found, skipping button creation');
+        
+        // Look for any videos in the current page that might need captions
+        const container = document.querySelector('[data-testid="composePostView"]') || document.body;
+        const videoElement = findMediaElement(container);
+        
+        if (videoElement && videoElement instanceof HTMLVideoElement) {
+          console.log('[addGenerateCaptionsButton] Found video but no caption section:', videoElement);
+          // We could potentially add a tooltip or notification here
+        }
+        
+        return;
+      }
       
       // Check if our button already exists
-      if (captionSection.querySelector(`#${CAPTION_BUTTON_ID}`)) return;
+      if (captionSection.querySelector(`#${CAPTION_BUTTON_ID}`)) {
+        console.log('[addGenerateCaptionsButton] Button already exists');
+        return;
+      }
       
-      // Find the button row in the captions section
-      const buttonRow = captionSection.querySelector('div.css-175oi2r[style*="flex-direction: row"]');
-      if (!buttonRow) return;
+      // Try to find an appropriate insertion point
+      let buttonContainer = null;
+      
+      // First try: Look for a button row
+      buttonContainer = captionSection.querySelector('div[style*="flex-direction: row"], div[style*="flex-direction:row"]');
+      
+      // Second try: Look for any container that has buttons
+      if (!buttonContainer) {
+        const existingButtons = captionSection.querySelectorAll('button');
+        if (existingButtons.length > 0) {
+          buttonContainer = existingButtons[0].parentElement;
+        }
+      }
+      
+      // Final fallback: Use the caption section itself
+      if (!buttonContainer) {
+        buttonContainer = captionSection;
+      }
+      
+      console.log('[addGenerateCaptionsButton] Using button container:', buttonContainer);
       
       // Create our generate captions button, styled similarly to the Select file button
       const button = document.createElement('button');
@@ -1006,7 +1092,7 @@ export default defineContentScript({
       button.addEventListener('click', generateCaptions);
       
       // Add button to the row
-      buttonRow.appendChild(button);
+      buttonContainer.appendChild(button);
       console.log('[addGenerateCaptionsButton] Added generate captions button');
     };
     
