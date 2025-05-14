@@ -569,59 +569,94 @@ export default defineContentScript({
 
     // Find video caption section in dialog
     const findCaptionSection = (): HTMLElement | null => {
+      console.log('[findCaptionSection] Searching for Video settings dialog...');
+      
       // First find the dialog that contains captions section
-      const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]')).filter(
-        el => el.getAttribute('aria-label')?.includes('Video settings')
+      const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
+      console.log('[findCaptionSection] Found', dialogs.length, 'dialogs on the page');
+      
+      // Log all dialogs for debugging
+      dialogs.forEach((dialog, index) => {
+        console.log(`[findCaptionSection] Dialog ${index}:`, dialog.getAttribute('aria-label'), dialog);
+      });
+      
+      // More permissive selection criteria - any dialog that might be related to video
+      const videoDialogs = dialogs.filter(
+        el => {
+          const label = el.getAttribute('aria-label');
+          return label && (
+            label.includes('Video') || 
+            label.includes('video') || 
+            label.includes('Media') || 
+            label.includes('media') ||
+            label.includes('Post') ||
+            label.includes('Settings')
+          );
+        }
       );
       
-      if (dialogs.length === 0) {
-        console.log('[findCaptionSection] Could not find Video settings dialog');
+      if (videoDialogs.length === 0) {
+        console.log('[findCaptionSection] Could not find any potential Video dialogs');
         return null;
       }
       
-      const dialog = dialogs[0];
-      console.log('[findCaptionSection] Found Video settings dialog:', dialog);
+      console.log('[findCaptionSection] Found potential video dialogs:', videoDialogs);
       
-      // Look for the "Captions (.vtt)" header within the dialog by text content
-      // Use all divs and filter by text content, not relying on class names
-      const captionHeaders = Array.from(dialog.querySelectorAll('div')).filter(
-        el => el.textContent?.includes('Captions (.vtt)')
-      );
-      
-      if (captionHeaders.length === 0) {
-        console.log('[findCaptionSection] Could not find Captions (.vtt) header');
-        return null;
-      }
-      
-      // Get the section that contains the caption UI
-      // Typically this is the div that follows the header
-      const captionHeader = captionHeaders[0];
-      console.log('[findCaptionSection] Found Captions (.vtt) header:', captionHeader);
-      
-      // Find the parent container that wraps the captions section
-      let captionSection = captionHeader.parentElement;
-      
-      // Now find the next sibling section that actually contains the buttons
-      if (captionSection) {
-        // Try to find the container that contains the upload button by aria-label
-        // Look for any div that contains a button with "subtitle file" in its aria-label
-        const captionControls = Array.from(captionSection.querySelectorAll('div')).filter(
-          el => el.querySelector('button[aria-label*="subtitle file"]')
-        );
+      // Try each dialog
+      for (const dialog of videoDialogs) {
+        console.log('[findCaptionSection] Examining dialog:', dialog);
         
-        if (captionControls.length > 0) {
-          console.log('[findCaptionSection] Found caption controls container:', captionControls[0]);
-          return captionControls[0] as HTMLElement;
+        // Look for the "Captions (.vtt)" header or any caption-related text
+        // More permissive search for any element mentioning captions
+        const captionHeaders = Array.from(dialog.querySelectorAll('div, span, label, p, h1, h2, h3, h4, h5, h6'))
+          .filter(el => {
+            const text = el.textContent?.toLowerCase() || '';
+            return text.includes('caption') || 
+                   text.includes('.vtt') || 
+                   text.includes('subtitle') ||
+                   text.includes('cc');
+          });
+        
+        if (captionHeaders.length > 0) {
+          console.log('[findCaptionSection] Found caption-related elements in dialog:', captionHeaders);
+          
+          // Get the section that contains the caption UI
+          const captionHeader = captionHeaders[0];
+          
+          // Find the parent container that wraps the captions section
+          // Look up several levels to ensure we find a suitable container
+          let captionSection = captionHeader;
+          
+          // Look for a container with file input or buttons - likely the real control section
+          for (let i = 0; i < 5; i++) {
+            // Check if current element or any descendant has a file input or button
+            if (captionSection.querySelector('input[type="file"], button') ||
+                (captionSection instanceof HTMLElement && 
+                 (captionSection.querySelector('[role="button"]') || 
+                  captionSection.style.display === 'flex'))) {
+              console.log('[findCaptionSection] Found suitable caption control section:', captionSection);
+              return captionSection as HTMLElement;
+            }
+            
+            // Move up to parent
+            if (!captionSection.parentElement) break;
+            captionSection = captionSection.parentElement;
+          }
+          
+          // Fallback - use the original caption section we found
+          console.log('[findCaptionSection] Using fallback caption section:', captionSection);
+          return captionSection as HTMLElement;
         }
       }
       
-      console.log('[findCaptionSection] Could not find precise caption controls, using fallback');
-      // Fallback to returning the caption section itself
-      return captionSection as HTMLElement;
+      console.log('[findCaptionSection] No caption section found in any dialog');
+      return null;
     };
     
     // Function to add the generate captions button
     const addGenerateCaptionsButton = () => {
+      console.log('[addGenerateCaptionsButton] Attempting to add Generate Captions button...');
+      
       // Find the captions section in the dialog
       const captionSection = findCaptionSection();
       if (!captionSection) {
@@ -629,18 +664,46 @@ export default defineContentScript({
         return;
       }
       
+      console.log('[addGenerateCaptionsButton] Found caption section:', captionSection);
+      
       // Check if our button already exists
       if (captionSection.querySelector(`#${CAPTION_BUTTON_ID}`)) {
         console.log('[addGenerateCaptionsButton] Button already exists');
         return;
       }
       
-      // Try to find an appropriate insertion point
-      // Look for the flex-direction: row container that holds the ".vtt" file selection button
-      let buttonContainer = captionSection.querySelector('div[style*="flex-direction: row"], div[style*="flex-direction:row"]');
+      // Try to find an appropriate insertion point with multiple strategies
+      let buttonContainer = null;
       
-      // If we couldn't find the button container, create a new one
+      // Strategy 1: Look for a div with flex-direction: row
+      buttonContainer = captionSection.querySelector('div[style*="flex-direction: row"], div[style*="flex-direction:row"]');
+      if (buttonContainer) {
+        console.log('[addGenerateCaptionsButton] Strategy 1: Found flex row container:', buttonContainer);
+      }
+      
+      // Strategy 2: Look for any div containing a button or file input
       if (!buttonContainer) {
+        const buttonContainers = Array.from(captionSection.querySelectorAll('div')).filter(
+          el => el.querySelector('button, input[type="file"]')
+        );
+        if (buttonContainers.length > 0) {
+          buttonContainer = buttonContainers[0];
+          console.log('[addGenerateCaptionsButton] Strategy 2: Found container with buttons:', buttonContainer);
+        }
+      }
+      
+      // Strategy 3: Look for elements with display:flex that might be button rows
+      if (!buttonContainer) {
+        const flexContainers = Array.from(captionSection.querySelectorAll('div[style*="display: flex"], div[style*="display:flex"]'));
+        if (flexContainers.length > 0) {
+          buttonContainer = flexContainers[0];
+          console.log('[addGenerateCaptionsButton] Strategy 3: Found flex container:', buttonContainer);
+        }
+      }
+      
+      // If we still couldn't find the button container, create a new one
+      if (!buttonContainer) {
+        console.log('[addGenerateCaptionsButton] No suitable container found, creating a new one');
         buttonContainer = document.createElement('div');
         
         // Copy classes from parent container if possible to match Bluesky's styling
@@ -653,6 +716,9 @@ export default defineContentScript({
         (buttonContainer as HTMLElement).style.flexDirection = 'row';
         (buttonContainer as HTMLElement).style.display = 'flex';
         (buttonContainer as HTMLElement).style.gap = '10px';
+        (buttonContainer as HTMLElement).style.marginTop = '10px';
+        
+        // Append to the caption section
         captionSection.appendChild(buttonContainer);
       } else {
         // Ensure the existing container has proper styling for consistent layout
@@ -663,8 +729,13 @@ export default defineContentScript({
       
       console.log('[addGenerateCaptionsButton] Using button container:', buttonContainer);
       
-      // Find the existing subtitle button to copy its style
-      const existingButton = captionSection.querySelector('button[aria-label*="subtitle file"]');
+      // Find any existing button to copy its style
+      const existingButton = captionSection.querySelector('button[aria-label*="subtitle file"]') || 
+                             captionSection.querySelector('button') ||
+                             document.querySelector('button[aria-label*="file"]') ||
+                             document.querySelector('[role="button"]');
+      
+      console.log('[addGenerateCaptionsButton] Found existing button to style from:', existingButton);
       
       // Create our generate captions button
       const button = document.createElement('button');
@@ -729,7 +800,11 @@ export default defineContentScript({
       } else if (buttonContainer) { // If it was found by querySelector, it's already an Element
         (buttonContainer as HTMLElement).appendChild(button); // Cast if necessary, though querySelector should return HTMLElement if found
       }
-      console.log('[addGenerateCaptionsButton] Added generate captions button');
+      
+      // Create a visible toast notification to confirm the button was added
+      createToast('Generate Captions button is now available', 'info', 5000);
+      
+      console.log('[addGenerateCaptionsButton] Added generate captions button successfully');
     };
     
     // Function to generate captions for a video
@@ -885,36 +960,78 @@ export default defineContentScript({
       document.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR).forEach(addGenerateButton);
       
       // Also check for caption sections on initial load
+      // Try multiple times to handle dynamic UI loading
       addGenerateCaptionsButton();
+      setTimeout(addGenerateCaptionsButton, 500);  // First attempt shortly after load
+      setTimeout(addGenerateCaptionsButton, 2000); // Second attempt after 2 seconds
+      setTimeout(addGenerateCaptionsButton, 5000); // Third attempt after 5 seconds
 
       manualModeObserver = new MutationObserver((mutations) => {
+        // Keep track if we've detected a likely dialog change that might contain captions
+        let shouldCheckForCaptions = false;
+        
         for (const mutation of mutations) {
           if (mutation.type === 'childList') {
             mutation.addedNodes.forEach(node => {
               if (node instanceof HTMLElement) {
+                // Handle alt text areas
                 if (node.matches(ALT_TEXT_SELECTOR)) {
                    addGenerateButton(node as HTMLTextAreaElement);
                 }
                 node.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR)
                   .forEach(addGenerateButton);
                   
-                // Look for captions sections
-                if (node.textContent?.includes('Captions') || node.textContent?.includes('.vtt')) {
-                  setTimeout(addGenerateCaptionsButton, 500); // Wait a bit for UI to stabilize
+                // Detect dialog additions and video-related elements
+                if (node.matches('div[role="dialog"]') || 
+                    node.getAttribute('aria-label')?.includes('Video') || 
+                    node.getAttribute('aria-label')?.includes('video') || 
+                    node.querySelector('video')) {
+                  console.log('[MutationObserver] Detected new dialog or video element:', node);
+                  shouldCheckForCaptions = true;
+                }
+                
+                // Look for captions sections by content
+                if (node.textContent?.includes('Captions') || 
+                    node.textContent?.includes('.vtt') || 
+                    node.textContent?.includes('subtitle') || 
+                    node.innerHTML?.includes('caption') ||
+                    node.querySelector('input[type="file"][accept*=".vtt"]')) {
+                  console.log('[MutationObserver] Detected possible caption-related element:', node);
+                  shouldCheckForCaptions = true;
+                }
+                
+                // Check for video elements being added
+                if (node.tagName === 'VIDEO' || node.querySelector('video')) {
+                  console.log('[MutationObserver] Video element detected:', node);
+                  shouldCheckForCaptions = true;
                 }
               }
             });
           }
-          if (mutation.type === 'attributes' && mutation.target instanceof HTMLElement && mutation.target.matches(ALT_TEXT_SELECTOR)) {
+          // Check for attribute changes on dialogs or video containers
+          if (mutation.type === 'attributes' && 
+              mutation.target instanceof HTMLElement && 
+              (mutation.target.matches('div[role="dialog"]') ||
+               mutation.target.querySelector('video'))) {
+            console.log('[MutationObserver] Detected attribute change on dialog or video container:', mutation.target);
+            shouldCheckForCaptions = true;
+          }
+          
+          // Alt text area handling (keep existing code)
+          if (mutation.type === 'attributes' && 
+              mutation.target instanceof HTMLElement && 
+              mutation.target.matches(ALT_TEXT_SELECTOR)) {
              addGenerateButton(mutation.target as HTMLTextAreaElement);
           }
         }
         
-        // Also check periodically for caption sections that might have been added
-        if (mutations.some(m => m.type === 'childList' && Array.from(m.addedNodes).some(n => 
-          n instanceof HTMLElement && (n.innerHTML?.includes('Captions') || n.innerHTML?.includes('.vtt'))
-        ))) {
-          setTimeout(addGenerateCaptionsButton, 500);
+        // If we detected any changes that might involve captions, try to add the button
+        if (shouldCheckForCaptions) {
+          console.log('[MutationObserver] Detected potential caption-related changes, attempting to add button');
+          // Use a timeout to let the UI stabilize
+          setTimeout(addGenerateCaptionsButton, 300);
+          // Try again a bit later in case the first attempt was too early
+          setTimeout(addGenerateCaptionsButton, 1000);
         }
       });
 
@@ -922,7 +1039,7 @@ export default defineContentScript({
           childList: true, 
           subtree: true, 
           attributes: true, 
-          attributeFilter: ['aria-label', 'placeholder', 'data-testid', 'role'] 
+          attributeFilter: ['aria-label', 'placeholder', 'data-testid', 'role', 'style', 'class'] 
       });
       console.log('[observeAltTextAreas] Observer attached to document body.');
     };
