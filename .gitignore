@@ -1,9 +1,9 @@
 # Build directories and outputs
-/.output
-.wxt
-dist
-temp
-node_modules
+.output/
+.wxt/
+dist/
+temp/
+node_modules/
 
 # Local config, secrets and logs
 .env
