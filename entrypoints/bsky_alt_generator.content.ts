@@ -657,23 +657,20 @@ export default defineContentScript({
     const addGenerateCaptionsButton = () => {
       console.log('[addGenerateCaptionsButton] Attempting to add Generate Captions button...');
       
-      // Find the captions section in the dialog
       const captionSection = findCaptionSection();
       if (!captionSection) {
         console.log('[addGenerateCaptionsButton] No caption section found, skipping button creation');
         return;
       }
-      
       console.log('[addGenerateCaptionsButton] Found caption section:', captionSection);
-      
-      // Check if our button already exists
+
       if (captionSection.querySelector(`#${CAPTION_BUTTON_ID}`)) {
         console.log('[addGenerateCaptionsButton] Button already exists');
         return;
       }
       
       // Try to find an appropriate insertion point with multiple strategies
-      let buttonContainer = null;
+      let buttonContainer: HTMLElement | Element | null = null; // Allow Element type
       
       // Strategy 1: Look for a div with flex-direction: row
       buttonContainer = captionSection.querySelector('div[style*="flex-direction: row"], div[style*="flex-direction:row"]');
@@ -706,22 +703,17 @@ export default defineContentScript({
         console.log('[addGenerateCaptionsButton] No suitable container found, creating a new one');
         buttonContainer = document.createElement('div');
         
-        // Copy classes from parent container if possible to match Bluesky's styling
         const parent = captionSection.parentElement;
         if (parent && parent.firstElementChild) {
           buttonContainer.className = parent.firstElementChild.className;
         }
         
-        // Set styles for proper layout
         (buttonContainer as HTMLElement).style.flexDirection = 'row';
         (buttonContainer as HTMLElement).style.display = 'flex';
         (buttonContainer as HTMLElement).style.gap = '10px';
         (buttonContainer as HTMLElement).style.marginTop = '10px';
-        
-        // Append to the caption section
         captionSection.appendChild(buttonContainer);
       } else {
-        // Ensure the existing container has proper styling for consistent layout
         (buttonContainer as HTMLElement).style.display = 'flex';
         (buttonContainer as HTMLElement).style.flexDirection = 'row';
         (buttonContainer as HTMLElement).style.gap = '10px';
@@ -729,7 +721,6 @@ export default defineContentScript({
       
       console.log('[addGenerateCaptionsButton] Using button container:', buttonContainer);
       
-      // Find any existing button to copy its style
       const existingButton = captionSection.querySelector('button[aria-label*="subtitle file"]') || 
                              captionSection.querySelector('button') ||
                              document.querySelector('button[aria-label*="file"]') ||
@@ -737,7 +728,6 @@ export default defineContentScript({
       
       console.log('[addGenerateCaptionsButton] Found existing button to style from:', existingButton);
       
-      // Create our generate captions button
       const button = document.createElement('button');
       button.id = CAPTION_BUTTON_ID;
       button.textContent = 'Generate Captions';
@@ -745,20 +735,14 @@ export default defineContentScript({
       button.setAttribute('role', 'button');
       button.setAttribute('tabindex', '0');
       
-      // Copy attributes and styles from the existing button if possible
       if (existingButton) {
-        // Copy classes without relying on specific class names
         button.className = existingButton.className;
-        
-        // Copy computed styles to ensure identical appearance
         const computedStyle = window.getComputedStyle(existingButton);
-        
-        // Apply the same styles but maintain our button's text
         Object.assign(button.style, {
           flexDirection: computedStyle.flexDirection,
           alignItems: computedStyle.alignItems,
           justifyContent: computedStyle.justifyContent,
-          backgroundColor: '#208bfe', // Keep our branded color
+          backgroundColor: '#208bfe',
           padding: computedStyle.padding,
           borderRadius: computedStyle.borderRadius,
           gap: computedStyle.gap,
@@ -773,7 +757,6 @@ export default defineContentScript({
           lineHeight: computedStyle.lineHeight
         });
       } else {
-        // Fallback styling if we can't find the existing button
         Object.assign(button.style, {
           flexDirection: 'row',
           alignItems: 'center',
@@ -790,20 +773,25 @@ export default defineContentScript({
         });
       }
       
-      // Add click handler
       button.addEventListener('click', generateCaptions);
       
-      // Add button to the row
-      // Ensure buttonContainer is treated as HTMLElement for style access if it was newly created
-      if (buttonContainer instanceof HTMLElement) {
+      // --- Precise Button Placement --- 
+      const subtitleButtonForPlacement = captionSection.querySelector('button[aria-label*="subtitle" i]') as HTMLElement;
+
+      if (subtitleButtonForPlacement && subtitleButtonForPlacement.parentElement) {
+        console.log('[addGenerateCaptionsButton] Precise placement: Inserting button after the found subtitle button:', subtitleButtonForPlacement);
+        subtitleButtonForPlacement.insertAdjacentElement('afterend', button);
+      } else if (buttonContainer instanceof HTMLElement) {
+        console.log('[addGenerateCaptionsButton] Fallback placement: Appending to identified buttonContainer.');
         buttonContainer.appendChild(button);
-      } else if (buttonContainer) { // If it was found by querySelector, it's already an Element
-        (buttonContainer as HTMLElement).appendChild(button); // Cast if necessary, though querySelector should return HTMLElement if found
+      } else if (buttonContainer && typeof (buttonContainer as any).appendChild === 'function'){
+        console.log('[addGenerateCaptionsButton] Fallback placement: Appending to Element (buttonContainer).');
+        (buttonContainer as Element).appendChild(button); // Cast to Element if it has appendChild
+      } else {
+        console.error('[addGenerateCaptionsButton] CRITICAL: Could not find a valid container or subtitle button for placement. Appending directly to captionSection as last resort.', captionSection);
+        captionSection.appendChild(button);
       }
-      
-      // Create a visible toast notification to confirm the button was added
-      createToast('Generate Captions button is now available', 'info', 5000);
-      
+      // createToast('Generate Captions button is now available', 'info', 5000); // Removed as per user request
       console.log('[addGenerateCaptionsButton] Added generate captions button successfully');
     };
     
