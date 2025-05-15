@@ -22,17 +22,17 @@ jobs:
       # --- (OPTIONAL) ADD YOUR BUILD STEPS HERE ---
       # If your site is just static HTML/CSS/JS and needs no build, you can skip this.
       # Example for a Node.js project (e.g., React, Vue, SvelteKit, Eleventy):
-      # - name: Set up Node.js
-      #   uses: actions/setup-node@v4
-      #   with:
-      #     node-version: '20' # Specify your Node.js version
-      #     cache: 'npm' # Or 'yarn' or 'pnpm'
-      #
-      # - name: Install dependencies
-      #   run: npm ci # Or yarn install --frozen-lockfile or pnpm install --frozen-lockfile
-      #
-      # - name: Build project
-      #   run: npm run build # Or your specific build script
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # Specify your Node.js version
+          cache: 'npm' # Or 'yarn' or 'pnpm'
+      
+      - name: Install dependencies
+        run: npm install
+      
+      - name: Build project
+        run: npm run build
       #   # Ensure your build output goes to a consistent directory, e.g., 'dist', 'build', 'public'
       #   # Let's assume the build output is in a directory called 'build_output' for this example
       #
