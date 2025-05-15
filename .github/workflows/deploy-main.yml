@@ -1,44 +1,60 @@
-name: Deploy Main Site to GitHub Pages
+name: Deploy Production Site to GitHub Pages
 
 on:
+  # Runs on pushes targeting the main branch
   push:
-    branches:
-      - main # Trigger the workflow on push events to the main branch
+    branches: ["main"]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
 
 jobs:
-  deploy-main:
-    name: Deploy Main Site
+  # Single deploy job since we're just deploying
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # Allows the action to push to the gh-pages branch
-      pages: write # Allows the action to deploy to GitHub Pages
-      id-token: write # Allows the action to authenticate with GitHub Pages
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4 # Checks out your repository under $GITHUB_WORKSPACE
-
+      - name: Checkout
+        uses: actions/checkout@v4
+      
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20' # Specify your Node.js version
-
+          node-version: '20'
+      
       - name: Install dependencies
-        run: npm install # Or npm ci for cleaner installs
-
+        run: npm install
+      
       - name: Build project
-        run: npm run build # Runs wxt build. Kept in case it processes root assets.
-
+        run: npm run build
+      
       - name: Create CNAME for production
         run: echo "alttext.symm.app" > CNAME
-        # This creates the CNAME file at the root for the production deployment.
-
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
+        # This creates the CNAME file at the root for the production deployment
+      
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+      
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./
-          # This directory should be the root of your repository.
-          cname: alttext.symm.app # Explicitly set CNAME here for the deployment
-          # user_name: 'github-actions[bot]' # Optional: Custom committer name
-          # user_email: 'github-actions[bot]@users.noreply.github.com' # Optional: Custom committer email 
+          # Upload entire repository
+          path: '.'
+      
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4 
