@@ -1,13 +1,13 @@
-name: Deploy Dev Site
+name: Deploy Production Site
 
 on:
   push:
     branches:
-      - dev
+      - main
   workflow_dispatch:
 
 jobs:
-  deploy-dev-site:
+  deploy-production-site:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -26,11 +26,11 @@ jobs:
         run: npm run build
         
       - name: Create CNAME file
-        run: echo "alttextdev.symm.app" > CNAME
+        run: echo "alttext.symm.app" > CNAME
         
-      - name: Deploy to GitHub Pages Dev
+      - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@v4
         with:
-          branch: gh-pages-dev
+          branch: gh-pages
           folder: .
-          clean: true
+          clean: true 
