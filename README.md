@@ -72,3 +72,4 @@ Let me also jot this down here for future reference:
 ```cmd
 cd functions && gcloud functions deploy generateAltTextProxy --gen2 --runtime=nodejs20 --trigger-http --allow-unauthenticated
 ```
+ 
