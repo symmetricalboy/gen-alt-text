@@ -531,7 +531,7 @@
                     updateStatus('Large image detected, attempting to optimize...', false);
                     const optimizedFile = await optimizeImageWithFFmpeg(originalFile); // Await FFmpeg op
                     if (!optimizedFile) {
-                        updateStatus('Failed to optimize the large image. Please try a smaller one or ensure it is under 20MB.', true);
+                        updateStatus('Failed to optimize the large image. Please try a smaller one or ensure it is under ${Math.floor(SINGLE_FILE_UPLOAD_LIMIT / (1024*1024))}MB.', true);
                         // showToast already handled by optimizeImageWithFFmpeg on its failure
                         return;
                     }
@@ -765,8 +765,9 @@
                 const optimizedFile = new File([optimizedBlob], outputFileName, { type: 'image/jpeg' });
 
                 if (optimizedFile.size > SINGLE_FILE_UPLOAD_LIMIT) {
-                    showToast(`Optimized image is still too large (${(optimizedFile.size / (1024*1024)).toFixed(1)}MB). Try a smaller original.`, 'error', 5000);
-                    updateStatus('Optimized image still too large.', true);
+                    console.warn(`Optimized image is still too large: ${(optimizedFile.size / (1024*1024)).toFixed(1)}MB`);
+                    showToast('Optimized image is still too large for direct API upload.', 'error');
+                    updateStatus(`Optimized image still too large (${(optimizedFile.size / (1024*1024)).toFixed(1)}MB). Max chunk size ${Math.floor(SINGLE_FILE_UPLOAD_LIMIT / (1024*1024))}MB.`, true);
                     return null;
                 }
                 

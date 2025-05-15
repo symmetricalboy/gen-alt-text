@@ -12,73 +12,69 @@ const ffmpegCoreWorkerPathSuffix = '/assets/ffmpeg/ffmpeg-core.worker.js'; // Ad
 
 async function getFFmpegInstance() {
     if (ffmpegInstance && ffmpegInstance.loaded) {
-        console.log('[Offscreen] FFmpeg already loaded and instance available.');
+        console.log('[Offscreen] Returning existing loaded FFmpeg instance.');
         return ffmpegInstance;
     }
-    console.log('[Offscreen] Loading FFmpeg instance...');
-
-    if (typeof self.FFmpeg === 'undefined' || typeof self.FFmpeg.FFmpeg === 'undefined') {
-        if (typeof self.FFmpegWASM !== 'undefined' && typeof self.FFmpegWASM.FFmpeg !== 'undefined') {
-            console.log('[Offscreen] FFmpegWASM found, assigning to self.FFmpeg.');
-            self.FFmpeg = self.FFmpegWASM;
-        } else {
-            console.error('[Offscreen] FFmpeg global object not found after ffmpeg.js script load.');
-            throw new Error('FFmpeg UMD script did not attach FFmpeg to global scope.');
-        }
+    if (loadInProgress) {
+        console.log('[Offscreen] FFmpeg load already in progress, awaiting completion...');
+        return loadPromise;
     }
 
-    try {
-        ffmpegInstance = new self.FFmpeg.FFmpeg();
-        console.log('[Offscreen] new self.FFmpeg.FFmpeg() instance created.');
-        // Enable verbose logging for FFmpeg library as early as possible
-        if (ffmpegInstance.setLogging) {
-            console.log('[Offscreen] Enabling FFmpeg library verbose logging before load.');
-            try {
-                ffmpegInstance.setLogging(true);
-            } catch (e) {
-                console.warn('[Offscreen] Could not enable FFmpeg verbose logging:', e);
+    loadInProgress = true;
+    loadPromise = new Promise(async (resolve, reject) => {
+        try {
+            if (!self.FFmpeg || !self.FFmpeg.FFmpeg) {
+                console.error('[Offscreen] self.FFmpeg or self.FFmpeg.FFmpeg is not available. Ensure ffmpeg.min.js is loaded and FFMPEG_MP is defined.');
+                throw new Error('FFmpeg library not available.');
             }
+            console.log('[Offscreen] Creating new FFmpeg instance...');
+            const newInstance = new self.FFmpeg.FFmpeg();
+            console.log('[Offscreen] FFmpeg instance created.');
+
+            if (newInstance.setLogging) {
+                console.log('[Offscreen] Enabling FFmpeg library verbose logging before load.');
+                try {
+                    newInstance.setLogging(true);
+                } catch (e) {
+                    console.warn('[Offscreen] Could not enable FFmpeg verbose logging:', e);
+                }
+            }
+
+            newInstance.on('log', ({ type, message }) => {
+                console.log(`[FFmpeg Log Offscreen - ${type}] ${message}`);
+            });
+            console.log('[Offscreen] Attached FFmpeg log listener.');
+
+            const corePath = browser.runtime.getURL('assets/ffmpeg/ffmpeg-core.js');
+            const wasmPath = browser.runtime.getURL('assets/ffmpeg/ffmpeg-core.wasm');
+            const workerPath = browser.runtime.getURL('assets/ffmpeg/ffmpeg-core.worker.js');
+
+            console.log('[Offscreen] FFmpeg core paths resolved:');
+            console.log(`[Offscreen] Core JS URL: ${corePath}`);
+            console.log(`[Offscreen] WASM URL: ${wasmPath}`);
+            console.log(`[Offscreen] Worker URL: ${workerPath}`);
+
+            console.log(`[Offscreen] PRE-LOAD: Attempting newInstance.load() now at ${new Date().toISOString()}`);
+            await newInstance.load({
+                coreURL: corePath,
+                wasmURL: wasmPath,
+                workerURL: workerPath,
+            });
+            console.log(`[Offscreen] POST-LOAD: newInstance.load() completed at ${new Date().toISOString()}`);
+            
+            console.log('[Offscreen] FFmpeg loaded successfully via explicit paths.');
+            newInstance.loaded = true; // Custom flag
+            ffmpegInstance = newInstance;
+            resolve(ffmpegInstance);
+        } catch (loadErr) {
+            console.error(`[Offscreen] CATCH-LOAD-ERROR: FFmpeg load failed at ${new Date().toISOString()} with error:`, loadErr);
+            ffmpegInstance = null; // Ensure it's null on failure
+            reject(loadErr);
+        } finally {
+            loadInProgress = false;
         }
-    } catch (e) {
-        console.error('[Offscreen] Error creating new self.FFmpeg.FFmpeg():', e);
-        throw e;
-    }
-
-    ffmpegInstance.on('log', ({ type, message }) => {
-        // console.log(`[Offscreen FFmpeg Log - ${type}] ${message}`); // More verbose local log
-        chrome.runtime.sendMessage({ 
-            type: 'ffmpegLogOffscreen', 
-            payload: { type, message } 
-        }).catch(e => console.warn('[Offscreen] Error sending log message:', e.message));
     });
-
-    const resolvedCorePath = chrome.runtime.getURL(ffmpegCoreJsPathSuffix);
-    const resolvedWasmPath = chrome.runtime.getURL(ffmpegCoreWasmPathSuffix);
-    const resolvedWorkerPath = chrome.runtime.getURL(ffmpegCoreWorkerPathSuffix);
-
-    console.log(`[Offscreen] Attempting to load FFmpeg with explicit paths:`);
-    console.log(`[Offscreen] Core JS URL: ${resolvedCorePath}`);
-    console.log(`[Offscreen] WASM URL: ${resolvedWasmPath}`);
-    console.log(`[Offscreen] Worker URL: ${resolvedWorkerPath}`);
-
-    try {
-        await ffmpegInstance.load({
-            coreURL: resolvedCorePath,
-            wasmURL: resolvedWasmPath,    // Explicitly provide wasmURL
-            workerURL: resolvedWorkerPath // Explicitly provide workerURL
-        }); 
-        console.log('[Offscreen] ffmpegInstance.load() promise resolved successfully.');
-    } catch (loadError) {
-        console.error('[Offscreen] Error caught directly from ffmpegInstance.load():', loadError);
-        throw loadError; // Re-throw to be caught by the caller in onMessage
-    }
-    
-    if (!ffmpegInstance.loaded) {
-        console.warn('[Offscreen] ffmpegInstance.load() resolved, but instance.loaded is false. CHECK NETWORK TAB for WASM/Worker loading issues!');
-    }
-
-    console.log('[Offscreen] FFmpeg core presumed loaded. instance.loaded status: ', ffmpegInstance.loaded);
-    return ffmpegInstance;
+    return loadPromise;
 }
 
 async function loadFFmpegOnce() {
@@ -160,12 +156,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         console.log('[Offscreen] Processing loadFFmpegOffscreen message...');
         getFFmpegInstance()
             .then(() => {
-                console.log('[Offscreen] getFFmpegInstance() successful for loadFFmpegOffscreen.');
-                sendResponse({ success: true, status: 'FFmpeg loaded in offscreen.' });
+                console.log('[Offscreen] FFmpeg load successful (from loadFFmpegOffscreen message).');
+                if (sender) sender.postMessage({ type: 'ffmpegLoaded', success: true, instanceId: ffmpegInstance?.id });
+                else chrome.runtime.sendMessage({ type: 'ffmpegLoaded', success: true, instanceId: ffmpegInstance?.id });
             })
-            .catch(e => {
-                console.error('[Offscreen] getFFmpegInstance() failed for loadFFmpegOffscreen:', e);
-                sendResponse({ success: false, error: e.message });
+            .catch(error => {
+                console.error('[Offscreen] FFmpeg load failed (from loadFFmpegOffscreen message):', error);
+                if (sender) sender.postMessage({ type: 'ffmpegLoaded', success: false, error: error.message || 'Unknown FFmpeg load error' });
+                else chrome.runtime.sendMessage({ type: 'ffmpegLoaded', success: false, error: error.message || 'Unknown FFmpeg load error' });
             });
         return true; // Indicates async response
     }
