@@ -245,7 +245,10 @@ export default defineContentScript({
     function addGenerateButton(textarea: HTMLTextAreaElement) {
       if (textarea.dataset.geminiButtonAdded === 'true') return;
       const contextContainer = findComposerContainer(textarea);
-      if (!contextContainer) return;
+      if (!contextContainer) {
+        console.log('[bsky_alt_generator] addGenerateButton: No contextContainer found for textarea:', textarea);
+        return;
+      }
       
       let mediaSearchContainer: Element | null = contextContainer;
       if (contextContainer.matches('[aria-label="Video settings"]')) {
