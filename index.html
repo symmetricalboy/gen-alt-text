@@ -839,13 +839,13 @@
                 if (durationMatch) {
                     durationSeconds = parseInt(durationMatch[1])*3600 + parseInt(durationMatch[2])*60 + parseInt(durationMatch[3]) + parseFloat("0." + durationMatch[4]);
                 } else {
-                    console.warn("Could not parse media duration from ffmpeg output for chunking.");
-                     if (inputFile.type.startsWith('video/')) { 
-                        showToast('Could not determine video duration for precise chunking. Attempting basic split.', 'warning');
+                    console.warn("[FFmpeg Chunking] Could not parse media duration from ffmpeg output for chunking for file:", inputFile.name);
+                     if (inputFile.type.startsWith('video/') || inputFile.type === 'image/gif') { 
+                        showToast('Could not determine media duration for precise chunking. Attempting basic split.', 'warning');
                      }
                 }
 
-                if (durationSeconds > 0 && inputFile.type.startsWith('video/')) { 
+                if (durationSeconds > 0 && (inputFile.type.startsWith('video/') || inputFile.type === 'image/gif')) { 
                     const avgBitrate = (inputFile.size * 8) / durationSeconds;
                     let segmentDuration = Math.floor((SINGLE_FILE_UPLOAD_LIMIT * 0.90 * 8) / avgBitrate);
                     segmentDuration = Math.max(10, Math.min(segmentDuration, 300)); 
@@ -854,8 +854,8 @@
                     for (let i = 0; startTime < durationSeconds; i++) {
                         const chunkOutputName = `${baseOutputName}_part${i + 1}${fileExtension}`;
                         let currentSegmentDuration = Math.min(segmentDuration, durationSeconds - startTime);
-                        if (currentSegmentDuration < 1 && (durationSeconds - startTime) > 0.1) currentSegmentDuration = durationSeconds - startTime;
-                        if (currentSegmentDuration <= 0.1 && i > 0) break;
+                        if (currentSegmentDuration < 1 && (durationSeconds - startTime) > 0.1) currentSegmentDuration = durationSeconds - startTime; // Ensure last bit is captured
+                        if (currentSegmentDuration <= 0.1 && i > 0) break; // Avoid tiny last segments if already processed some
 
                         updateStatus(`Preparing chunk ${i + 1}: from ${startTime.toFixed(1)}s for ${currentSegmentDuration.toFixed(1)}s`, false);
                         ffmpegLogOutput = ""; // Clear for exec
@@ -869,11 +869,16 @@
                         ]);
                         
                         let data = await ffmpeg.readFile(chunkOutputName);
-                        let chunkFile = new File([data.buffer], chunkOutputName, { type: inputFile.type });
+                        let actualChunkType = inputFile.type;
+                        let finalChunkOutputName = chunkOutputName;
+                        let chunkFile = new File([data.buffer], finalChunkOutputName, { type: actualChunkType });
 
                         if (chunkFile.size > SINGLE_FILE_UPLOAD_LIMIT * 1.05) { 
-                            console.warn(`Codec copy for chunk ${i+1} too large (${(chunkFile.size/(1024*1024)).toFixed(1)}MB). Re-encoding with size limit.`);
-                            await ffmpeg.deleteFile(chunkOutputName);
+                            console.warn(`[FFmpeg Chunking] Codec copy for chunk ${i+1} ('${finalChunkOutputName}') resulted in ${(chunkFile.size/(1024*1024)).toFixed(1)}MB. Re-encoding to MP4 with size limit.`);
+                            await ffmpeg.deleteFile(finalChunkOutputName); // Delete the oversized copied chunk
+
+                            const reEncodeOutputName = `${baseOutputName}_part${i + 1}.mp4`; // Force .mp4 extension
+                            
                             ffmpegLogOutput = ""; // Clear for exec
                             await ffmpeg.exec([
                                 '-ss', '' + startTime,
@@ -883,25 +888,30 @@
                                 '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', 
                                 '-c:a', 'aac', '-b:a', '96k',
                                 '-avoid_negative_ts', 'make_zero',
-                                chunkOutputName
+                                reEncodeOutputName // Output to .mp4 file
                             ]);
-                            data = await ffmpeg.readFile(chunkOutputName);
-                            chunkFile = new File([data.buffer], chunkOutputName, { type: inputFile.type }); 
+                            data = await ffmpeg.readFile(reEncodeOutputName);
+                            finalChunkOutputName = reEncodeOutputName; 
+                            actualChunkType = 'video/mp4'; 
+                            chunkFile = new File([data.buffer], finalChunkOutputName, { type: actualChunkType }); 
+                            
                             if (chunkFile.size > SINGLE_FILE_UPLOAD_LIMIT * 1.05) { 
-                                 await ffmpeg.deleteFile(chunkOutputName);
-                                 throw new Error(`Re-encoded chunk ${i+1} still too large after attempting size limit.`);
+                                 await ffmpeg.deleteFile(finalChunkOutputName);
+                                 throw new Error(`Re-encoded chunk ${i+1} ('${finalChunkOutputName}') still too large after attempting size limit: ${(chunkFile.size/(1024*1024)).toFixed(1)}MB.`);
                             }
+                            console.log(`[FFmpeg Chunking] Re-encoded chunk ${i+1} ('${finalChunkOutputName}') to ${actualChunkType}, size: ${(chunkFile.size/(1024*1024)).toFixed(1)}MB.`);
                         }
                         
                         chunks.push(chunkFile);
-                        await ffmpeg.deleteFile(chunkOutputName);
+                        await ffmpeg.deleteFile(finalChunkOutputName); // Delete the successfully processed chunk
                         startTime += currentSegmentDuration;
                         if (chunks.length >= 15) { 
                             showToast('Media resulted in too many chunks (>15). Stopping segmentation.', 'warning'); break;
                         }
                     }
-                } else { 
-                    console.log('Attempting single chunk size-based split (e.g. for GIFs, or videos with no duration).');
+                } else if (inputFile.size > SINGLE_FILE_UPLOAD_LIMIT) { 
+                    console.warn(`[FFmpeg Chunking] File ${inputFile.name} (${(inputFile.size / (1024*1024)).toFixed(1)}MB) will be processed with a single-chunk strategy due to no determinable duration for multi-segmentation or unsupported type for time-based segmentation. Output size will be capped around ${SINGLE_FILE_UPLOAD_LIMIT / (1024*1024)}MB. This may result in a partial file if the original is much larger.`);
+                    console.log('[FFmpeg Chunking] Attempting single chunk size-based split (e.g., for files with no duration or specific non-video/gif types).');
                     const chunkOutputName = `${baseOutputName}_part1${fileExtension}`;
                     ffmpegLogOutput = ""; // Clear for exec
                     await ffmpeg.exec([

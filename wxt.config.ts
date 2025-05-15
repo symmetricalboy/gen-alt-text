@@ -40,13 +40,15 @@ export default defineConfig({
     
     // Permissions needed
     permissions: [
-      // 'activeTab',     // Can be useful for context, but might not be strictly necessary depending on approach
-      // 'scripting',     // Required to inject content scripts
-      // 'contextMenus', // If adding a right-click menu item later
-      // 'alarms',      // If needing scheduled tasks
+      'storage',
+      'activeTab',
+      'scripting',
+      'contextMenus',
+      'offscreen' // Add offscreen permission
     ],
     host_permissions: [
       '*://*.bsky.app/*', // Allow interaction with Bluesky pages
+      'https://us-central1-symm-gemini.cloudfunctions.net/*', // For the cloud function
       // Remove Gemini permission:
       // 'https://generativelanguage.googleapis.com/*',
       // Add Cloud Function permission:
@@ -55,21 +57,35 @@ export default defineConfig({
     
     // Content Security Policy
     content_security_policy: {
-      extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",
+      extension_pages: "script-src 'self' 'wasm-unsafe-eval'; script-src-elem 'self' 'wasm-unsafe-eval'; object-src 'self'; worker-src 'self';",
       // sandbox: "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval'; child-src 'self';" // if you use sandboxed pages
+    },
+
+    // Configure background script as a service worker
+    background: {
+      service_worker: 'background.js'
     },
 
     // Web accessible resources for icon usage in content scripts
     web_accessible_resources: [
       {
-        resources: ['icons/*', 'assets/*', 'assets/ffmpeg/*'], // Added assets/ffmpeg/*
+        // For content scripts to access icons and potentially other assets if needed directly
+        resources: ['icons/*', 'assets/ui/*'], // Example: if you have UI assets
         matches: ['*://*.bsky.app/*']
       },
-      // Make FFmpeg core files accessible for loading by the FFmpeg library itself
       {
-        resources: ['assets/ffmpeg/ffmpeg-core.wasm', 'assets/ffmpeg/ffmpeg-core.worker.js'], // Be explicit if needed
-        matches: ['<all_urls>'], // Or more restrictively, the extension's own origin
-        use_dynamic_url: true // Important for some browsers/setups with Wasm
+        // For FFmpeg assets, making them accessible primarily to the extension itself.
+        // The service worker needs to load ffmpeg.js via importScripts,
+        // and ffmpeg.js/ffmpeg-core.js might need to load .wasm and .worker.js files.
+        resources: [
+          'assets/ffmpeg/*',
+          'offscreen.html',
+          'offscreen-ffmpeg-handler.js'
+        ],
+        // Using <all_urls> for now to bypass build error with dynamic ID.
+        // CSP script-src 'self' is the more direct controller for importScripts.
+        matches: ['<all_urls>'], 
+        use_dynamic_url: true // Recommended for WASM and worker scripts
       }
     ],
     
@@ -85,8 +101,7 @@ export default defineConfig({
     // Browser action settings
     action: {
       default_title: 'Bluesky Alt Text Generator Options',
-      // No popup for now, handled by content script interaction
-      // default_popup: 'entrypoints/popup/index.html',
+      default_popup: 'popup.html',
     },
     
     // Icons - using default ones from WXT for now

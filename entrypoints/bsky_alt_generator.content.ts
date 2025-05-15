@@ -1,4 +1,3 @@
-import iconUrl from '/icons/gen-alt-text-white.svg';
 import { defineContentScript } from '#imports';
 
 export default defineContentScript({
@@ -58,7 +57,12 @@ export default defineContentScript({
         });
 
         backgroundPort.onDisconnect.addListener(() => {
-          console.error('Disconnected from background script!', backgroundPort?.error);
+          const lastError = chrome.runtime.lastError;
+          if (lastError) {
+            console.error('Disconnected from background script due to an error:', lastError.message);
+          } else {
+            console.error('Disconnected from background script without a specific runtime error.'); 
+          }
           backgroundPort = null;
           createToast('Connection to background service lost. Please reload the extension or page.', 'error', 15000);
         });
@@ -130,8 +134,9 @@ export default defineContentScript({
         '[data-testid="videoPreview"] video[src]', '[data-testid="videos"] video[src]',
         '[data-testid="videoPreview"] video source[src]', '[data-testid="videos"] video source[src]',
         'video[src]', 'video source[src]',
-        '[data-testid="imagePreview"] img[src]', '[data-testid="images"] img[src]',
-        'img[src]:not([alt*="avatar" i]):not([src*="avatar"])'
+        '[data-testid="imagePreview"] img[src]:not([alt="AI"])', 
+        '[data-testid="images"] img[src]:not([alt="AI"])',
+        'img[src]:not([alt*="avatar" i]):not([src*="avatar"]):not([alt="AI"])'
       ];
       const visibleElements: (HTMLImageElement | HTMLVideoElement)[] = [];
       for (const selector of selectors) {
@@ -143,7 +148,11 @@ export default defineContentScript({
               visibleElements.push(videoParent);
             }
           } else if (element && isElementVisible(element) && !visibleElements.includes(element as (HTMLImageElement | HTMLVideoElement))) {
-            visibleElements.push(element as (HTMLImageElement | HTMLVideoElement));
+            if (element instanceof HTMLImageElement && element.closest(`#${BUTTON_ID}`)) {
+                // Skip if it's an image inside our button
+            } else {
+                visibleElements.push(element as (HTMLImageElement | HTMLVideoElement));
+            }
           }
         });
       }
@@ -152,6 +161,7 @@ export default defineContentScript({
         if (videoElements.length > 0) return videoElements[videoElements.length - 1];
         return visibleElements[visibleElements.length - 1];
       }
+      console.warn('[findMediaElement - V2] No suitable media element found in container:', container);
       return null;
     };
 
@@ -176,26 +186,61 @@ export default defineContentScript({
          src = sourceEl?.src || mediaElement.src;
       }
       if (!src) { createToast('Could not find media source.', 'error'); return null; }
+      console.log('[getMediaFileObject] Media source URL:', src);
 
       let fileName = 'pasted_media';
       try {
         const urlObj = new URL(src);
         fileName = urlObj.pathname.substring(urlObj.pathname.lastIndexOf('/') + 1) || fileName;
-      } catch (e) { /* Not a valid URL */ }
+      } catch (e) { console.warn('[getMediaFileObject] Could not parse src as URL for filename:', src, e); }
+      
+      // Attempt to get a file extension from the fileName if it doesn't have one
       if (!fileName.includes('.') && mediaElement.dataset.mimeType) {
-          fileName += '.' + mediaElement.dataset.mimeType.split('/')[1] || 'bin';
+          const probableExtension = mediaElement.dataset.mimeType.split('/')[1];
+          if (probableExtension) fileName += '.' + probableExtension;
+          else fileName += '.bin'; // fallback extension
+          console.log('[getMediaFileObject] Constructed fileName from mimeType:', fileName);
+      } else if (!fileName.includes('.')) {
+          console.warn('[getMediaFileObject] fileName has no extension and no mediaElement.dataset.mimeType available. Defaulting to .bin if blob type is missing.', fileName);
       }
 
       try {
+        console.log('[getMediaFileObject] Fetching media from:', src);
         const response = await fetch(src);
+        if (!response.ok) {
+            console.error(`[getMediaFileObject] Fetch failed with status ${response.status}: ${response.statusText} for URL: ${src}`);
+            createToast(`Error fetching media (status ${response.status}).`, 'error');
+            return null;
+        }
         const blob = await response.blob();
+        console.log('[getMediaFileObject] Fetched blob. Size:', blob.size, 'Blob type from response:', blob.type);
+
         if (blob.size > TOTAL_MEDIA_SIZE_LIMIT) {
           createToast(`File is too large (${(blob.size / (1024*1024)).toFixed(1)}MB). Max ${TOTAL_MEDIA_SIZE_LIMIT/(1024*1024)}MB.`, 'error');
           return null;
         }
-        const nameFromType = blob.type.replace('/', '.');
+        
+        let fileType = blob.type;
+        if (!fileType) {
+            console.warn('[getMediaFileObject] Blob type is missing/empty. Attempting to infer from fileName:', fileName);
+            const extension = fileName.split('.').pop()?.toLowerCase();
+            if (extension === 'jpg' || extension === 'jpeg') fileType = 'image/jpeg';
+            else if (extension === 'png') fileType = 'image/png';
+            else if (extension === 'gif') fileType = 'image/gif';
+            else if (extension === 'webp') fileType = 'image/webp';
+            else if (extension === 'mp4') fileType = 'video/mp4';
+            else if (extension === 'mov') fileType = 'video/quicktime';
+            // Add more common types as needed
+            else {
+                fileType = 'application/octet-stream'; // Generic fallback
+                console.warn('[getMediaFileObject] Could not infer type from extension, defaulting to application/octet-stream.');
+            }
+        }
+
+        const nameFromType = fileType.replace('/', '.');
         const finalFileName = src.startsWith('data:') ? `data_url_media.${nameFromType}` : (fileName || `blob_media.${nameFromType}`);
-        return new File([blob], finalFileName, {type: blob.type});
+        console.log('[getMediaFileObject] Creating file with name:', finalFileName, 'type:', fileType);
+        return new File([blob], finalFileName, {type: fileType});
       } catch (e) {
         console.error('[getMediaFileObject] Error processing media source:', src, e);
         createToast('Error processing media data.', 'error');
@@ -243,30 +288,56 @@ export default defineContentScript({
     }
 
     function addGenerateButton(textarea: HTMLTextAreaElement) {
-      if (textarea.dataset.geminiButtonAdded === 'true') return;
-      const contextContainer = findComposerContainer(textarea);
-      if (!contextContainer) {
-        console.log('[bsky_alt_generator] addGenerateButton: No contextContainer found for textarea:', textarea);
+      console.log('[bsky_alt_generator] addGenerateButton CALLED for textarea:', textarea);
+
+      const buttonAttachPoint = textarea.parentElement;
+      if (!buttonAttachPoint) {
+        console.log('[bsky_alt_generator] addGenerateButton: No buttonAttachPoint (parentElement is null). Skipping for textarea:', textarea);
         return;
       }
+      console.log('[bsky_alt_generator] addGenerateButton: textarea.parentElement is:', buttonAttachPoint);
+
+      const existingButtonById = buttonAttachPoint.querySelector(`#${BUTTON_ID}`);
+      console.log('[bsky_alt_generator] addGenerateButton: Result of buttonAttachPoint.querySelector(#BUTTON_ID) before checks:', existingButtonById);
+
+      // Check if a button with this ID already exists in the attach point FIRST
+      if (existingButtonById) {
+         console.log('[bsky_alt_generator] addGenerateButton: Button with ID already exists in attach point (checked by querySelector). Ensuring textarea is marked and skipping.:', textarea);
+         textarea.dataset.geminiButtonAdded = 'true'; // Ensure it's marked if button found
+         return;
+      }
+
+      // Then, check the dataset attribute.
+      const datasetValue = textarea.dataset.geminiButtonAdded;
+      console.log(`[bsky_alt_generator] addGenerateButton: Value of textarea.dataset.geminiButtonAdded before check: '${datasetValue}', type: ${typeof datasetValue}`);
+      if (datasetValue === 'true') {
+        console.log('[bsky_alt_generator] addGenerateButton: Textarea already marked with geminiButtonAdded=\'true\', but no button found by ID. Skipping to avoid conflict/duplicates.:', textarea);
+        return;
+      }
+
+      const contextContainer = findComposerContainer(textarea);
+      if (!contextContainer) {
+        console.log('[bsky_alt_generator] addGenerateButton: No contextContainer found. Skipping for textarea:', textarea);
+        return;
+      }
+      console.log('[bsky_alt_generator] addGenerateButton: Found contextContainer:', contextContainer, 'for textarea:', textarea);
       
       let mediaSearchContainer: Element | null = contextContainer;
       if (contextContainer.matches('[aria-label="Video settings"]')) {
           mediaSearchContainer = document.querySelector('[data-testid="composePostView"]');
-          if (!mediaSearchContainer) return;
+          if (!mediaSearchContainer) {
+            console.log('[bsky_alt_generator] addGenerateButton: mediaSearchContainer (composePostView) not found for video settings context. Skipping for textarea:', textarea);
+            return; // Added return if mediaSearchContainer not found in this specific case
+          }
       }
       
-      const buttonAttachPoint = textarea.parentElement;
-      if (!buttonAttachPoint || buttonAttachPoint.querySelector(`#${BUTTON_ID}`)) {
-         if(buttonAttachPoint) textarea.dataset.geminiButtonAdded = 'true'; 
-         return;
-      }
+      console.log('[bsky_alt_generator] addGenerateButton: All checks passed, proceeding to create and add button for textarea:', textarea);
       
       const button = document.createElement('button');
       button.id = BUTTON_ID;
       button.title = 'Generate Alt Text';
       const icon = document.createElement('img');
-      try { icon.src = browser.runtime.getURL(iconUrl); } catch (e) { /* ignore */ }
+      try { icon.src = browser.runtime.getURL('/icons/gen-alt-text-white.svg'); } catch (e) { /* ignore */ }
       icon.alt = 'AI';
       Object.assign(icon.style, { width: '16px', height: '16px', marginRight: '6px' });
       button.appendChild(icon);
@@ -275,7 +346,8 @@ export default defineContentScript({
         marginLeft: '8px', padding: '8px 16px', cursor: 'pointer', border: 'none',
         borderRadius: '8px', backgroundColor: '#208bfe', display: 'flex',
         alignItems: 'center', justifyContent: 'center', fontSize: '14px',
-        fontWeight: 'bold', color: 'white'
+        fontWeight: 'bold', color: 'white',
+        zIndex: '9999' // Added z-index just in case
       });
 
       const originalButtonTextContentForThisButton = button.innerHTML;
@@ -293,72 +365,147 @@ export default defineContentScript({
         const mediaFile = await getMediaFileObject(mediaElement);
         if (!mediaFile) return;
 
+        // console.log('[ContentScript] MediaFile object to be sent:', mediaFile); // Old log
         setActiveButton(button, 'AI Alt Text...');
 
         let videoMeta = {};
         if (mediaElement instanceof HTMLVideoElement) videoMeta = getVideoMetadata(mediaElement);
 
-        new Promise<string>((resolve, reject) => {
-          const specificHandler = (message: any) => {
-            if (message.originalFileName === mediaFile.name && (message.type === 'altTextResult' || message.type === 'error')) {
-              if (backgroundPort) backgroundPort.onMessage.removeListener(specificHandler);
-              resetButtonText(button, originalButtonTextContentForThisButton);
-              if (message.error) reject(new Error(message.error));
-              else if (message.altText !== undefined) resolve(message.altText);
-              else reject(new Error('Invalid alt text response.'));
-            }
-          };
-          if (backgroundPort) backgroundPort.onMessage.addListener(specificHandler);
-          else { reject(new Error('Background port not connected.')); return; }
+        function arrayBufferToBase64(buffer: ArrayBuffer): string {
+          let binary = '';
+          const bytes = new Uint8Array(buffer);
+          const len = bytes.byteLength;
+          for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(bytes[i]);
+          }
+          return btoa(binary);
+        }
 
-          backgroundPort.postMessage({
-            type: 'processLargeMedia',
-            payload: { file: mediaFile, generationType: 'altText', videoMetadata: videoMeta }
+        try {
+          const arrayBuffer = await mediaFile.arrayBuffer();
+          const base64Data = arrayBufferToBase64(arrayBuffer); // Convert to Base64
+
+          const fileDataForMessage = {
+            name: mediaFile.name,
+            type: mediaFile.type,
+            size: mediaFile.size,
+            base64Data: base64Data, // Send Base64 string
+          };
+          console.log('[ContentScript] FileDataForMessage to be sent (with base64Data):', fileDataForMessage.name, 'Base64 length:', base64Data.length);
+
+          new Promise<string>((resolve, reject) => {
+            const specificHandler = (message: any) => {
+              // Use fileDataForMessage.name for matching
+              if (message.originalFileName === fileDataForMessage.name && (message.type === 'altTextResult' || message.type === 'error')) {
+                if (backgroundPort) backgroundPort.onMessage.removeListener(specificHandler);
+                resetButtonText(button, originalButtonTextContentForThisButton);
+                if (message.error) reject(new Error(message.error));
+                else if (message.altText !== undefined) resolve(message.altText);
+                else reject(new Error('Invalid alt text response.'));
+              }
+            };
+            if (backgroundPort) backgroundPort.onMessage.addListener(specificHandler);
+            else { 
+              resetButtonText(button, originalButtonTextContentForThisButton);
+              reject(new Error('Background port not connected.')); 
+              return; 
+            }
+
+            backgroundPort.postMessage({
+              type: 'processLargeMedia',
+              payload: {
+                name: fileDataForMessage.name,      // from fileDataForMessage
+                type: fileDataForMessage.type,      // from fileDataForMessage
+                size: fileDataForMessage.size,      // from fileDataForMessage
+                base64Data: fileDataForMessage.base64Data, // from fileDataForMessage
+                generationType: 'altText',
+                videoMetadata: videoMeta
+              }
+            });
+            setTimeout(() => {
+              if (backgroundPort) backgroundPort.onMessage.removeListener(specificHandler);
+              if (activeButtonElement === button) {
+                  resetButtonText(button, originalButtonTextContentForThisButton);
+              }
+              reject(new Error('Alt text generation timed out.'));
+            }, 360000);
+          })
+          .then(altText => {
+            textarea.value = altText;
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            createToast('Alt text generated!', 'success');
+          })
+          .catch(error => {
+            console.error('Error generating alt text:', error);
+            if (activeButtonElement === button) {
+               resetButtonText(button, originalButtonTextContentForThisButton);
+            }
+            createToast(error.message || 'Unknown error generating alt text', 'error');
           });
-          setTimeout(() => {
-            if (backgroundPort) backgroundPort.onMessage.removeListener(specificHandler);
-            reject(new Error('Alt text generation timed out.'));
-          }, 360000);
-        })
-        .then(altText => {
-          textarea.value = altText;
-          textarea.dispatchEvent(new Event('input', { bubbles: true }));
-          createToast('Alt text generated!', 'success');
-        })
-        .catch(error => {
-          console.error('Error generating alt text:', error);
-          createToast(error.message, 'error');
-          resetButtonText(button, originalButtonTextContentForThisButton);
-        });
+        } catch (error) {
+            console.error('[ContentScript] Error converting file to ArrayBuffer or sending:', error);
+            createToast('Error preparing file for processing.', 'error');
+            resetButtonText(button, originalButtonTextContentForThisButton);
+        }
       };
       buttonAttachPoint.appendChild(button);
       textarea.dataset.geminiButtonAdded = 'true';
+      console.log('[bsky_alt_generator] addGenerateButton: SUCCESSFULLY ADDED button for textarea:', textarea);
+      console.log('[bsky_alt_generator] addGenerateButton: Button appended. button.isConnected:', button.isConnected, 'button.offsetParent:', button.offsetParent);
+      // Check if it can be found immediately after adding
+      const buttonFoundAfterAdd = buttonAttachPoint.querySelector(`#${BUTTON_ID}`);
+      console.log('[bsky_alt_generator] addGenerateButton: Result of buttonAttachPoint.querySelector(#BUTTON_ID) immediately after add:', buttonFoundAfterAdd);
     }
 
     const findCaptionSection = (): HTMLElement | null => {
+        console.log('[findCaptionSection] Attempting to find caption section...');
         const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
+        console.log(`[findCaptionSection] Found ${dialogs.length} dialogs.`);
         for (const dialog of dialogs) {
             const label = dialog.getAttribute('aria-label');
+            console.log('[findCaptionSection] Checking dialog with label:', label, dialog);
             if (label && (label.includes('Video') || label.includes('video') || label.includes('Media'))) {
+                console.log('[findCaptionSection] Dialog label matched for Video/Media. Searching for caption headers...');
                 const captionHeaders = Array.from(dialog.querySelectorAll('div, span, label, p, h1, h2, h3'))
                     .filter(el => el.textContent?.toLowerCase().includes('caption') || el.textContent?.toLowerCase().includes('.vtt'));
+                console.log(`[findCaptionSection] Found ${captionHeaders.length} potential caption headers.`);
                 if (captionHeaders.length > 0) {
-                    let captionSection: HTMLElement = captionHeaders[0] as HTMLElement;
-                    for (let i = 0; i < 5; i++) {
-                        if (captionSection.querySelector('input[type="file"], button, [role="button"]')) return captionSection;
-                        if (!captionSection.parentElement) break;
-                        captionSection = captionSection.parentElement;
+                    let captionSectionElement: HTMLElement = captionHeaders[0] as HTMLElement;
+                    console.log('[findCaptionSection] Initial caption header element:', captionSectionElement);
+                    for (let i = 0; i < 5; i++) { // Try to find a suitable parent container
+                        if (captionSectionElement.querySelector('input[type="file"], button, [role="button"]')) {
+                            console.log('[findCaptionSection] Found suitable caption section with input/button:', captionSectionElement);
+                            return captionSectionElement;
+                        }
+                        if (!captionSectionElement.parentElement) {
+                            console.log('[findCaptionSection] Caption header has no parentElement, breaking search upwards.');
+                            break;
+                        }
+                        captionSectionElement = captionSectionElement.parentElement;
+                        console.log('[findCaptionSection] Moved to parent element:', captionSectionElement);
                     }
-                    return captionHeaders[0] as HTMLElement;
+                    // Fallback to the first header if no better container found by traversing up
+                    console.log('[findCaptionSection] Could not find ideal parent, falling back to first caption header\'s parent or itself:', captionHeaders[0].parentElement || captionHeaders[0]);
+                    return captionHeaders[0].parentElement || captionHeaders[0] as HTMLElement;
                 }
             }
         }
+        console.log('[findCaptionSection] No suitable caption section found after checking all dialogs.');
         return null;
     };
 
     const addGenerateCaptionsButton = () => {
+      console.log('[addGenerateCaptionsButton] Attempting to add button...');
       const captionSection = findCaptionSection();
-      if (!captionSection || captionSection.querySelector(`#${CAPTION_BUTTON_ID}`)) return;
+      if (!captionSection) {
+        console.log('[addGenerateCaptionsButton] No captionSection found. Button not added.');
+        return;
+      }
+      if (captionSection.querySelector(`#${CAPTION_BUTTON_ID}`)) {
+        console.log('[addGenerateCaptionsButton] Caption button already exists. Skipping.');
+        return;
+      }
+      console.log('[addGenerateCaptionsButton] Found captionSection:', captionSection, 'Proceeding to add button.');
 
       let buttonContainer: HTMLElement | null = captionSection.querySelector('div[style*="flex-direction: row"]');
       if (!buttonContainer) {
@@ -376,7 +523,7 @@ export default defineContentScript({
       const button = document.createElement('button');
       button.id = CAPTION_BUTTON_ID;
       const icon = document.createElement('img');
-      try { icon.src = browser.runtime.getURL(iconUrl); } catch(e) { /* ignore */ }
+      try { icon.src = browser.runtime.getURL('/icons/gen-alt-text-white.svg'); } catch(e) { /* ignore */ }
       icon.alt = 'AI';
       Object.assign(icon.style, { width: '16px', height: '16px', marginRight: '6px' });
       button.appendChild(icon);
@@ -470,7 +617,10 @@ export default defineContentScript({
     const observeAltTextAreas = () => {
       if (manualModeObserver) manualModeObserver.disconnect();
       console.log('[observeAltTextAreas] Starting observer...');
-      document.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR).forEach(addGenerateButton);
+      const existingTextareas = document.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR);
+      console.log(`[observeAltTextAreas] Found ${existingTextareas.length} existing textareas with selector: ${ALT_TEXT_SELECTOR}`);
+      existingTextareas.forEach(addGenerateButton);
+      
       addGenerateCaptionsButton();
       setTimeout(addGenerateCaptionsButton, 500);
       setTimeout(addGenerateCaptionsButton, 2000);
@@ -481,34 +631,39 @@ export default defineContentScript({
           if (mutation.type === 'childList') {
             mutation.addedNodes.forEach(node => {
               if (node instanceof HTMLElement) {
-                if (node.matches(ALT_TEXT_SELECTOR)) addGenerateButton(node as HTMLTextAreaElement);
-                node.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR).forEach(addGenerateButton);
-                if (node.matches('div[role="dialog"]') || node.querySelector('video') || node.textContent?.includes('Caption')) {
+                // Check for new dialogs that might contain caption sections
+                if (node.matches('div[role="dialog"]') || node.querySelector('div[role="dialog"]')) {
+                  console.log('[MutationObserver] Dialog added or content changed, re-checking for caption button.');
                   shouldCheckForCaptions = true;
+                }
+
+                if (node.matches(ALT_TEXT_SELECTOR)) {
+                  console.log('[MutationObserver] Matched ALT_TEXT_SELECTOR on added node:', node);
+                  addGenerateButton(node as HTMLTextAreaElement);
+                }
+                const childTextareas = node.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR);
+                if (childTextareas.length > 0) {
+                  console.log(`[MutationObserver] Found ${childTextareas.length} child textareas with selector: ${ALT_TEXT_SELECTOR}`);
+                  childTextareas.forEach(addGenerateButton);
                 }
               }
             });
           }
-          if (mutation.type === 'attributes' && mutation.target instanceof HTMLElement) {
-            if (mutation.target.matches(ALT_TEXT_SELECTOR)) addGenerateButton(mutation.target as HTMLTextAreaElement);
-            if (mutation.target.matches('div[role="dialog"]') || mutation.target.querySelector('video')) {
-                 shouldCheckForCaptions = true;
-            }
+          // Also consider if the mutation itself might be relevant to caption sections,
+          // e.g. attributes changing on a dialog.
+          if (mutation.type === 'attributes' && mutation.target instanceof HTMLElement && mutation.target.matches('div[role="dialog"]')) {
+            console.log('[MutationObserver] Attributes changed on a dialog, re-checking for caption button.');
+            shouldCheckForCaptions = true;
           }
         }
         if (shouldCheckForCaptions) {
-            setTimeout(addGenerateCaptionsButton, 300);
-            setTimeout(addGenerateCaptionsButton, 1000);
+          addGenerateCaptionsButton();
         }
       });
-      manualModeObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-label', 'placeholder', 'data-testid', 'role', 'style', 'class'] });
+
+      manualModeObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'aria-label', 'class'] });
     };
 
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', observeAltTextAreas);
-    } else {
-      observeAltTextAreas();
-    }
-    console.log('Bluesky Alt Text Generator content script setup complete.');
+    observeAltTextAreas();
   }
 });
