@@ -1,0 +1,44 @@
+name: Deploy Dev Site to GitHub Pages
+
+on:
+  push:
+    branches:
+      - dev # Trigger the workflow on push events to the dev branch
+
+jobs:
+  deploy-dev:
+    name: Deploy Dev Site
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Allows the action to push to the gh-pages branch
+      pages: write # Allows the action to deploy to GitHub Pages
+      id-token: write # Allows the action to authenticate with GitHub Pages
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4 # Checks out your repository under $GITHUB_WORKSPACE
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # Specify your Node.js version
+
+      - name: Install dependencies
+        run: npm install # Or npm ci for cleaner installs
+
+      - name: Build project
+        run: npm run build # Runs wxt build. Kept in case it processes root assets.
+
+      - name: Create CNAME for dev
+        run: echo "alttextdev.symm.app" > CNAME
+        # This creates the CNAME file at the root for the dev deployment.
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./
+          # This directory should be the root of your repository.
+          cname: alttextdev.symm.app # Explicitly set CNAME here for the deployment
+          # user_name: 'github-actions[bot]' # Optional: Custom committer name
+          # user_email: 'github-actions[bot]@users.noreply.github.com' # Optional: Custom committer email 
