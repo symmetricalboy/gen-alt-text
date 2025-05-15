@@ -1,0 +1,29 @@
+name: Deploy Dev Site to Branch
+
+on:
+  push:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      # Add CNAME file for dev domain
+      - name: Create CNAME file
+        run: echo "alttextdev.symm.app" > CNAME
+      
+      # Deploy to gh-pages-dev branch
+      - name: Deploy to gh-pages-dev branch
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: .
+          branch: gh-pages-dev
+          clean: true 
