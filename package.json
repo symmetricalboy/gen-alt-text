@@ -20,6 +20,7 @@
   },
   "devDependencies": {
     "@types/chrome": "^0.0.313",
+    "@types/webextension-polyfill": "^0.12.3",
     "@vitejs/plugin-react": "^4.4.1",
     "@wxt-dev/auto-icons": "^1.0.2",
     "typescript": "^5.8.3",

@@ -265,8 +265,8 @@
 
         // Constants
         const CLOUD_FUNCTION_URL = 'https://us-central1-symm-gemini.cloudfunctions.net/generateAltTextProxy';
-        const SINGLE_FILE_UPLOAD_LIMIT = 19 * 1024 * 1024; // 19MB for individual chunks/files to allow some headroom
-        const TOTAL_MEDIA_SIZE_LIMIT = 100 * 1024 * 1024; // 100MB total
+        const SINGLE_FILE_UPLOAD_LIMIT = 19 * 1024 * 1024; // 19MB for individual processed chunks (approx 25.3MB base64)
+        const TOTAL_MEDIA_SIZE_LIMIT = 100 * 1024 * 1024; // 100MB total for original media file, matching Bluesky
         const ALT_TEXT_MAX_LENGTH = 2000; // Bluesky's limit
         
         // DOM Elements
