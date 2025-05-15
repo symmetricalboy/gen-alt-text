@@ -234,17 +234,23 @@ functions.http('generateAltTextProxy', async (req, res) => {
         
         // Check if this is a caption generation request
         if (req.body.action === 'generateCaptions') {
-            const { base64Data, mimeType, duration, transcriptId } = req.body;
+            let { base64Data, mimeType, duration, transcriptId } = req.body; // Allow mimeType to be modified
             
             if (!base64Data || !mimeType) {
                 return res.status(400).json({ error: 'Missing required fields: base64Data and mimeType' });
             }
-            
-            if (!mimeType.startsWith('video/')) {
-                return res.status(400).json({ error: 'Invalid mime type for caption generation. Expected video/*' });
+
+            const originalMimeTypeForCaptions = mimeType;
+            if (mimeType.includes(';')) {
+                mimeType = mimeType.split(';')[0];
+                console.log(`Cleaned mimeType for captions from "${originalMimeTypeForCaptions}" to: "${mimeType}"`);
             }
             
-            console.log(`Processing caption generation request for ${mimeType}, data length: ${base64Data.length}, duration: ${duration || 'unknown'}, ID: ${transcriptId}`);
+            if (!mimeType.startsWith('video/')) {
+                return res.status(400).json({ error: `Invalid mime type for caption generation. Expected video/*, got "${mimeType}" (original: "${originalMimeTypeForCaptions}")` });
+            }
+            
+            console.log(`Processing caption generation request for ${mimeType} (original: ${originalMimeTypeForCaptions}), data length: ${base64Data.length}, duration: ${duration || 'unknown'}, ID: ${transcriptId}`);
             
             // Prepare the caption request
             const videoDuration = duration || 60; // Default to 60 seconds if no duration provided
@@ -378,16 +384,24 @@ In a real implementation, we would analyze the actual video.`;
         }
         
         // Regular image/video alt text generation
-        const { base64Data, mimeType } = req.body;
+        let { base64Data, mimeType } = req.body; // Allow mimeType to be modified
+
         if (!base64Data || !mimeType) {
             return res.status(400).json({ error: 'Missing required fields: base64Data and mimeType' });
         }
         if (typeof base64Data !== 'string' || typeof mimeType !== 'string') {
             return res.status(400).json({ error: 'Invalid data types for base64Data or mimeType' });
         }
+
+        const originalMimeTypeForAltText = mimeType;
+        if (mimeType.includes(';')) {
+            mimeType = mimeType.split(';')[0];
+            console.log(`Cleaned mimeType for alt text from "${originalMimeTypeForAltText}" to: "${mimeType}"`);
+        }
+
         // Basic check for common image/video types - adjust as needed
         if (!mimeType.startsWith('image/') && !mimeType.startsWith('video/')) {
-             console.warn(`Received potentially unsupported mimeType: ${mimeType}`);
+             console.warn(`Received potentially unsupported mimeType: ${mimeType} (original: ${originalMimeTypeForAltText})`);
              // Allow it for now, Gemini might handle it, but consider stricter validation
         }
 
@@ -403,7 +417,7 @@ In a real implementation, we would analyze the actual video.`;
         // (implying it's a frame extracted from a non-natively-animated-image video type).
         const isVideoFrame = isVideo && mimeType.startsWith('image/') && !isAnimatedImage;
 
-        console.log(`Processing allowed request from origin: ${requestOrigin}, mimeType: ${mimeType}, data length: ${base64Data.length}, isVideo: ${isVideo}, isAnimatedImage: ${isAnimatedImage}, isVideoFrame: ${isVideoFrame}`);
+        console.log(`Processing allowed request from origin: ${requestOrigin}, mimeType: ${mimeType} (original: ${originalMimeTypeForAltText}), data length: ${base64Data.length}, isVideo: ${isVideo}, isAnimatedImage: ${isAnimatedImage}, isVideoFrame: ${isVideoFrame}`);
 
         // Add special handling for video frames
         let effectiveSystemInstructions = systemInstructions;
@@ -413,11 +427,21 @@ In a real implementation, we would analyze the actual video.`;
         }
 
         // --- Call Gemini API ---
+        let mimeTypeForGemini = mimeType; // Start with the (cleaned) original mimeType
+        if (isVideo && isAnimatedImage) {
+            // If the client flagged it as video-like (e.g., for Bluesky posting requirements)
+            // AND it's one of our recognized animated image types (gif, animated webp, apng),
+            // let's try sending a common video MIME type to Gemini.
+            // The system instructions for animated images should still guide Gemini correctly.
+            mimeTypeForGemini = 'video/mp4'; 
+            console.log(`ALERT: For Gemini API call, overriding mimeType from "${mimeType}" to "${mimeTypeForGemini}" because isVideo=true and isAnimatedImage=true.`);
+        }
+
         const geminiRequestBody = {
           contents: [{
             parts: [
               { text: effectiveSystemInstructions },
-              { inline_data: { mime_type: mimeType, data: base64Data } }
+              { inline_data: { mime_type: mimeTypeForGemini, data: base64Data } } // Use mimeTypeForGemini
             ]
           }],
           generationConfig: {
