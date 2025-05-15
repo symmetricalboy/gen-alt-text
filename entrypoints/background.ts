@@ -77,7 +77,7 @@ async function setupOffscreenDocument() {
             };
             chrome.runtime.onMessage.addListener(initialLoadListener);
             console.log('[Background] Sending loadFFmpegOffscreen to offscreen document.');
-            chrome.runtime.sendMessage({ target: 'offscreen', type: 'loadFFmpegOffscreen' })
+            chrome.runtime.sendMessage({ target: 'offscreen-ffmpeg', type: 'loadFFmpegOffscreen' })
                 .catch(err => { // Catch error if sendMessage itself fails (e.g., no listener)
                     clearTimeout(timeoutId);
                     chrome.runtime.onMessage.removeListener(initialLoadListener);
@@ -141,7 +141,7 @@ async function runFFmpegInOffscreen(command, inputFile, outputFileName) {
         ffmpegOperations.set(id, { resolve, reject });
 
         chrome.runtime.sendMessage({
-            target: 'offscreen',
+            target: 'offscreen-ffmpeg',
             type: 'runFFmpegOffscreen',
             payload: {
                 operationId: id,

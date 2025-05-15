@@ -3,8 +3,9 @@ console.log('[Offscreen] Handler script loaded.');
 
 let ffmpegInstance = null;
 let FFMPEG_LOADED = false;
+let loadInProgress = false;
+let loadPromise = null;
 const MAX_LOAD_ATTEMPTS = 2;
-let loadAttempts = 0;
 // Original relative path for constructing the full URL
 const ffmpegCoreJsPathSuffix = '/assets/ffmpeg/ffmpeg-core.js';
 const ffmpegCoreWasmPathSuffix = '/assets/ffmpeg/ffmpeg-core.wasm';
@@ -143,32 +144,40 @@ async function loadFFmpegOnce() {
 }
 
 // Listener for messages from the Service Worker
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    // Ensure messages are intended for the offscreen document
-    if (request.target !== 'offscreen') {
-        // console.log('[Offscreen] Message not for me:', request.target);
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    console.log('[Offscreen] Message received in onMessage listener:', message);
+
+    // Ensure messages are intended for the offscreen document and this specific handler
+    if (message.target !== 'offscreen-ffmpeg') {
+        console.log('[Offscreen] Message target \'' + message.target + '\' not for offscreen-ffmpeg, ignoring.');
         return false; // Not handling this message
     }
 
-    console.log('[Offscreen] Received message:', request.type, request.payload?.operationId ? `opId: ${request.payload.operationId}`: '');
+    console.log('[Offscreen] Processing message for target offscreen-ffmpeg:', message.type, message.payload?.operationId ? `opId: ${message.payload.operationId}`: '');
 
-    if (request.type === 'loadFFmpegOffscreen') {
+    if (message.type === 'loadFFmpegOffscreen') { // This message is still sent with target: 'offscreen' from background.ts setupOffscreenDocument
         console.log('[Offscreen] Processing loadFFmpegOffscreen message...');
         getFFmpegInstance()
             .then(() => {
                 console.log('[Offscreen] FFmpeg load successful (from loadFFmpegOffscreen message).');
-                if (sender) sender.postMessage({ type: 'ffmpegLoaded', success: true, instanceId: ffmpegInstance?.id });
-                else chrome.runtime.sendMessage({ type: 'ffmpegLoaded', success: true, instanceId: ffmpegInstance?.id });
+                // Send message back to background script
+                chrome.runtime.sendMessage({ 
+                    type: 'ffmpegStatusOffscreen', 
+                    payload: { status: 'FFmpeg loaded in offscreen.' } 
+                }).catch(e => console.warn('[Offscreen] Error sending ffmpegStatusOffscreen (success) message:', e.message));
             })
             .catch(error => {
                 console.error('[Offscreen] FFmpeg load failed (from loadFFmpegOffscreen message):', error);
-                if (sender) sender.postMessage({ type: 'ffmpegLoaded', success: false, error: error.message || 'Unknown FFmpeg load error' });
-                else chrome.runtime.sendMessage({ type: 'ffmpegLoaded', success: false, error: error.message || 'Unknown FFmpeg load error' });
+                // Send error message back to background script
+                chrome.runtime.sendMessage({ 
+                    type: 'ffmpegStatusOffscreen', 
+                    payload: { status: 'FFmpeg load failed in offscreen.', error: error.message || 'Unknown FFmpeg load error' } 
+                }).catch(e => console.warn('[Offscreen] Error sending ffmpegStatusOffscreen (error) message:', e.message));
             });
         return true; // Indicates async response
     }
-    else if (request.type === 'runFFmpegOffscreen') {
-        const { operationId, command, inputFile, outputFileName } = request.payload;
+    else if (message.type === 'runFFmpegOffscreen') { // Target 'offscreen-ffmpeg' already confirmed by the outer if
+        const { operationId, command, inputFile, outputFileName } = message.payload;
         let ffmpeg;
         console.log(`[Offscreen] Processing runFFmpegOffscreen message for opId: ${operationId}`);
 
