@@ -1,4 +1,4 @@
-name: Deploy Dev Site to GitHub Pages
+name: Build and Deploy Dev Site to gen-alt-text-dev repository
 
 on:
   push:
@@ -6,38 +6,24 @@ on:
       - dev
   workflow_dispatch:
 
-# Required for GitHub Pages deployment
 permissions:
-  contents: write
-  pages: write
-  id-token: write
-
-# Allow only one concurrent deployment
-concurrency:
-  group: "pages-dev"
-  cancel-in-progress: true
+  contents: read # To checkout the current repo's dev branch
 
 jobs:
-  build-and-deploy:
-    environment:
-      name: github-pages-dev
-      url: https://alttextdev.symm.app/
+  deploy-to-dev-repo:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout gen-alt-text 'dev' branch
         uses: actions/checkout@v4
-        
-      # Setup GitHub Pages
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
-        
-      # Upload the artifact
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
         with:
-          path: '.'
-          
-      # Deploy to GitHub Pages
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4 
+          ref: dev
+
+      - name: Deploy to gen-alt-text-dev repository
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          token: ${{ secrets.GH_PAT_FOR_DEV_REPO }}
+          repository-name: symmetricalboy/gen-alt-text-dev # <-- IMPORTANT: REPLACE your-username
+          branch: main # Target branch in gen-alt-text-dev
+          folder: . # Deploy the root of the current repo's dev branch
+          clean: true # Remove existing files in the target branch
+          single-commit: true # Optional: creates a single commit in the target repo
