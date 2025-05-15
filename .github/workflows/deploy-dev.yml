@@ -1,4 +1,4 @@
-name: Deploy Dev Site
+name: Deploy Dev Site to GitHub Pages
 
 on:
   push:
@@ -30,14 +30,6 @@ jobs:
       - name: Create CNAME file
         run: echo "alttextdev.symm.app" > CNAME
         
-      # Deploy to gh-pages-dev branch
-      - name: Deploy to gh-pages-dev branch
-        uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          folder: .
-          branch: gh-pages-dev
-          clean: true
-          
       # Setup GitHub Pages
       - name: Setup Pages
         uses: actions/configure-pages@v4
