@@ -1,0 +1,2 @@
+# Preserve CNAME in each branch
+CNAME merge=ours 
