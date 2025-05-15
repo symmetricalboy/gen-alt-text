@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head>    <meta charset="UTF-8">    <meta name="viewport" content="width=device-width, initial-scale=1.0">    <title>Bluesky Alt Text Generator</title>    <link rel="icon" href="/favicon.ico" type="image/x-icon">    <link rel="manifest" href="/manifest.json">    <meta name="theme-color" content="#208bfe">    <meta name="apple-mobile-web-app-capable" content="yes">    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">    <meta name="apple-mobile-web-app-title" content="Alt Text">    <link rel="apple-touch-icon" href="/public/icons/full-bleed-icon-128.png">
+<!DOCTYPE html><html lang="en"><head>    <meta charset="UTF-8">    <meta name="viewport" content="width=device-width, initial-scale=1.0">    <title>Bluesky Alt Text Generator</title>    <link rel="icon" href="/favicon.ico" type="image/x-icon">    <link rel="manifest" href="/manifest.json">    <meta name="theme-color" content="#208bfe">    <meta name="apple-mobile-web-app-capable" content="yes">    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">    <meta name="apple-mobile-web-app-title" content="Alt Text">    <link rel="apple-touch-icon" href="/public/icons/full-bleed-icon-128.png">    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
     <style>
         :root {
             --primary-color: #208bfe;
@@ -258,9 +258,16 @@
     </footer>
     
     <script>
+        // FFmpeg Integration & New Constants
+        let ffmpeg;
+        const FFmpeg = window.FFmpeg; // Assuming FFmpeg is loaded globally via CDN script tag
+        const FFMPEG_CORE_URL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js';
+
         // Constants
         const CLOUD_FUNCTION_URL = 'https://us-central1-symm-gemini.cloudfunctions.net/generateAltTextProxy';
-        const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+        const SINGLE_FILE_UPLOAD_LIMIT = 19 * 1024 * 1024; // 19MB for individual chunks/files to allow some headroom
+        const TOTAL_MEDIA_SIZE_LIMIT = 100 * 1024 * 1024; // 100MB total
+        const ALT_TEXT_MAX_LENGTH = 2000; // Bluesky's limit
         
         // DOM Elements
         const fileInput = document.getElementById('file-input');
@@ -273,8 +280,37 @@
         const captionBtn = document.getElementById('caption-btn');
         
         // Current file data
-        let currentFile = null;
-        let currentMediaElement = null;
+        let originalFile = null; // Stores the initially selected file
+        let currentMediaElement = null; // For preview
+        // let processedChunksData = []; // Not directly used, results handled in processFiles
+
+        // FFmpeg Loader
+        async function loadFFmpeg() {
+            if (!ffmpeg) {
+                if (!FFmpeg || !FFmpeg.FFmpeg) {
+                    console.error('FFmpeg library not loaded on window. Ensure the CDN script is included and loaded.');
+                    updateStatus('FFmpeg library not available. Large file processing disabled.', true);
+                    showToast('FFmpeg library missing.', 'error');
+                    return null;
+                }
+                ffmpeg = new FFmpeg.FFmpeg();
+                updateStatus('Loading FFmpeg lib (may take a few seconds)...', false);
+                console.log('Loading FFmpeg...');
+                try {
+                    const coreURL = FFmpeg.coreURL || FFMPEG_CORE_URL;
+                    await ffmpeg.load({ coreURL });
+                    console.log('FFmpeg loaded successfully.');
+                    updateStatus('FFmpeg lib loaded.', false);
+                    setTimeout(() => updateStatus('', false), 2000);
+                } catch (error) {
+                    console.error('Failed to load FFmpeg:', error);
+                    updateStatus('Failed to load FFmpeg. Chunking for large files will be unavailable.', true);
+                    showToast('Failed to load FFmpeg. Large file processing might be limited.', 'error', 5000);
+                    ffmpeg = null; 
+                }
+            }
+            return ffmpeg;
+        }
         
         // Helper function to determine if a file should be treated as video for processing
         function isEffectivelyVideo(file) {
@@ -316,19 +352,9 @@
         
         dropArea.addEventListener('drop', handleDrop, false);
         
-        function handleDrop(e) {
-            const dt = e.dataTransfer;
-            const files = dt.files;
-            
-            if (files.length > 0) {
-                fileInput.files = files;
-                handleFileSelect();
-            }
-        }
-        
-        generateBtn.addEventListener('click', generateAltText);
+        generateBtn.addEventListener('click', () => processMediaGeneration('altText'));
         copyBtn.addEventListener('click', copyToClipboard);
-        captionBtn.addEventListener('click', generateCaptions);
+        captionBtn.addEventListener('click', () => processMediaGeneration('captions'));
         
         // Function to update status message
         function updateStatus(message, isError = false) {
@@ -343,21 +369,30 @@
             const file = fileInput.files[0];
             
             if (!file) return;
-            
-            if (file.size > MAX_FILE_SIZE) {
-                showToast('File is too large. Maximum size is 20MB.', 'error');
+
+            // Check if file exceeds TOTAL_MEDIA_SIZE_LIMIT first
+            if (file.size > TOTAL_MEDIA_SIZE_LIMIT) {
+                showToast(`File is too large (${(file.size / (1024 * 1024)).toFixed(1)}MB). Maximum total size is ${TOTAL_MEDIA_SIZE_LIMIT / (1024 * 1024)}MB.`, 'error');
+                updateStatus(`File exceeds maximum allowed size of ${TOTAL_MEDIA_SIZE_LIMIT / (1024 * 1024)}MB.`, true);
+                previewContainer.style.display = 'none';
+                previewContainer.innerHTML = '<h3>Preview</h3>';
+                originalFile = null;
+                fileInput.value = ''; // Reset file input
+                generateBtn.disabled = true;
+                captionBtn.style.display = 'none';
                 return;
             }
             
-            // For large videos, warn about potential processing time
-            if (file.type.startsWith('video/') && file.size > 10 * 1024 * 1024) {
-                showToast('Large videos may take longer to process.', 'warning', 6000);
+            originalFile = file; // Assign to global originalFile here
+
+            // For large videos, warn about potential processing time - this remains generally true
+            if (file.type.startsWith('video/') && file.size > 10 * 1024 * 1024) { // General warning for large videos
+                showToast('Large videos may take longer to process, especially if chunking is needed.', 'warning', 6000);
             }
-            
-            currentFile = file;
             
             // Clear previous preview
             previewContainer.innerHTML = '<h3>Preview</h3>';
+            currentMediaElement = null; // Reset media element
             
             // Create appropriate preview
             if (file.type.startsWith('image/')) {
@@ -374,7 +409,8 @@
                 const video = document.createElement('video');
                 video.id = 'preview';
                 video.controls = true;
-                video.muted = true;
+                video.muted = true; // Important for autoplay if any, and for frame extraction
+                video.preload = 'metadata'; // Helpful for getting duration quickly
                 previewContainer.appendChild(video);
                 currentMediaElement = video;
                 
@@ -393,8 +429,8 @@
             }
             
             previewContainer.style.display = 'block';
-            generateBtn.disabled = false;
-            
+            // generateBtn.disabled = false; // Logic moved below
+
             // Reset result and status
             resultBox.innerHTML = '<p style="color: #666;">Click "Generate Alt Text" to analyze this media...</p>';
             updateStatus('', false);
@@ -404,117 +440,529 @@
             console.log(`Selected file: ${file.name}, type: ${file.type}, size: ${(file.size / (1024 * 1024)).toFixed(2)}MB`);
             
             // Show captions button for videos (actual videos, not animated images)
-            captionBtn.style.display = file.type.startsWith('video/') ? 'block' : 'none';
+            // captionBtn.style.display = file.type.startsWith('video/') ? 'block' : 'none'; // Logic moved below
+
+            // Enable/disable buttons based on file size and ffmpeg status
+            generateBtn.disabled = true; // Disable initially, enable based on conditions
+            captionBtn.style.display = 'none'; // Hide initially
+
+            if (file.size <= SINGLE_FILE_UPLOAD_LIMIT) {
+                generateBtn.disabled = false;
+                if (file.type.startsWith('video/')) { // True videos, not animated images generally for captions
+                    captionBtn.style.display = 'block';
+                }
+                updateStatus('Ready to process.', false);
+            } else { // File > SINGLE_FILE_UPLOAD_LIMIT, needs ffmpeg
+                resultBox.innerHTML = '<p style="color: #666;">Large media selected. Click "Generate..." to begin advanced processing (may involve loading FFmpeg or chunking).</p>';
+                if (!ffmpeg || !ffmpeg.loaded) {
+                    updateStatus('FFmpeg is needed for this large file. Loading...', false);
+                    loadFFmpeg().then(ffmpegInstance => {
+                        if (ffmpegInstance && ffmpegInstance.loaded) {
+                            updateStatus('FFmpeg ready. Large file can be processed via chunking/optimization.', false);
+                            generateBtn.disabled = false;
+                            if (file.type.startsWith('video/')) {
+                                captionBtn.style.display = 'block';
+                            }
+                        } else {
+                            updateStatus(`FFmpeg failed to load. Cannot process files larger than ${SINGLE_FILE_UPLOAD_LIMIT / (1024*1024)}MB.`, true);
+                            showToast(`Selected file is large, but FFmpeg could not be loaded. Please try a smaller file.`, 'error', 6000);
+                            // generateBtn remains disabled
+                        }
+                    });
+                } else { // FFmpeg already loaded
+                    generateBtn.disabled = false;
+                    if (file.type.startsWith('video/')) {
+                        captionBtn.style.display = 'block';
+                    }
+                    // Provide more specific status based on type for large files
+                    if (file.type.startsWith('video/') || file.type === 'image/gif') {
+                        updateStatus(`Large file (${(file.size / (1024*1024)).toFixed(1)}MB) detected. It will be split into smaller parts.`, false);
+                    } else if (file.type.startsWith('image/')) { // Non-animated images
+                        updateStatus(`Large image (${(file.size / (1024*1024)).toFixed(1)}MB) detected. It will be optimized.`, false);
+                    } else {
+                        updateStatus(`Large file (${(file.size / (1024*1024)).toFixed(1)}MB) of unsupported type for automated processing. Max ${SINGLE_FILE_UPLOAD_LIMIT / (1024*1024)}MB.`, true);
+                        generateBtn.disabled = true; // Disable if type not supported for large file processing
+                        captionBtn.style.display = 'none';
+                    }
+                }
+            }
         }
         
-        // Send image to server for Alt Text generation
-        function generateAltText() {
-            // Get the selected file from the existing variable
-            if (!currentFile) {
+        // New Core Processing Logic
+        async function processMediaGeneration(generationType) { // 'altText' or 'captions'
+            if (!originalFile) {
                 updateStatus('Please select an image or video file first.', true);
+                showToast('No file selected.', 'error');
                 return;
             }
+
+            const commonUnsupportedTypeMessage = () => {
+                const limitMB = SINGLE_FILE_UPLOAD_LIMIT / (1024*1024);
+                updateStatus(`File type not supported for automated large file processing. Max ${limitMB}MB for this type.`, true);
+                showToast(`This file type cannot be automatically chunked/optimized if over ${limitMB}MB.`, 'error');
+            };
+
+            // Double check total size limit, though handleFileSelect should catch it.
+            if (originalFile.size > TOTAL_MEDIA_SIZE_LIMIT) { 
+                 showToast(`File is too large (${(originalFile.size / (1024 * 1024)).toFixed(1)}MB). Maximum total size is ${TOTAL_MEDIA_SIZE_LIMIT / (1024 * 1024)}MB.`, 'error');
+                 updateStatus(`File exceeds maximum allowed size of ${TOTAL_MEDIA_SIZE_LIMIT / (1024 * 1024)}MB.`, true);
+                 return;
+            }
+
+            if (originalFile.size > SINGLE_FILE_UPLOAD_LIMIT) { // Needs ffmpeg
+                if (!ffmpeg || !ffmpeg.loaded) {
+                    showToast('FFmpeg not loaded or still loading. Cannot process large file yet.', 'error');
+                    updateStatus('FFmpeg not available. Please wait for it to load or try a smaller file.', true);
+                    // Attempt to load it again if user clicks, might be useful if initial auto-load failed
+                    if (!ffmpeg) loadFFmpeg().then(f => { if(f && f.loaded) showToast('FFmpeg now loaded, please try again.', 'success'); }); 
+                    return;
+                }
+
+                if (originalFile.type.startsWith('video/') || originalFile.type === 'image/gif') {
+                    updateStatus('File is large, preparing chunks... This may take some time.', false);
+                    const chunks = await chunkFileWithFFmpeg(originalFile); // Await FFmpeg op
+                    if (!chunks || chunks.length === 0) {
+                        updateStatus('Failed to chunk the file. It might be too complex or an error occurred.', true);
+                        // showToast already handled by chunkFileWithFFmpeg on its failure
+                        return;
+                    }
+                    await processFiles(chunks, generationType);
+                } else if (originalFile.type.startsWith('image/')) { // Non-animated images
+                    updateStatus('Large image detected, attempting to optimize...', false);
+                    const optimizedFile = await optimizeImageWithFFmpeg(originalFile); // Await FFmpeg op
+                    if (!optimizedFile) {
+                        updateStatus('Failed to optimize the large image. Please try a smaller one or ensure it is under 20MB.', true);
+                        // showToast already handled by optimizeImageWithFFmpeg on its failure
+                        return;
+                    }
+                    await processFiles([optimizedFile], generationType);
+                } else {
+                    commonUnsupportedTypeMessage();
+                    return;
+                }
+            } else { // File is small enough, process directly
+                await processFiles([originalFile], generationType);
+            }
+        }
+
+        async function processFiles(filesToProcess, generationType) {
+            const originalBtn = (generationType === 'altText') ? generateBtn : captionBtn;
+            const otherBtn = (generationType === 'altText') ? captionBtn : generateBtn; 
+            const originalBtnText = originalBtn.innerHTML;
+
+            originalBtn.innerHTML = `<span class="loading"></span>Processing ${filesToProcess.length} part(s)...`;
+            originalBtn.disabled = true;
+            otherBtn.disabled = true; 
+            if (generationType === 'altText') {
+                 resultBox.innerHTML = '<p style="color: #666;">Processing for alt text...</p>';
+                 copyBtn.disabled = true;
+            } else {
+                 resultBox.innerHTML = '<p style="color: #666;">Processing for captions...</p>';
+            }
             
-            // Clear previous results but show processing message
-            updateStatus('AI service is processing your media. This may take several minutes for large files...', true);
-            resultBox.innerHTML = '<p style="color: #666;">Processing your media...</p>';
-            copyBtn.disabled = true;
-            
-            // Show loading state for button
-            const originalBtnText = generateBtn.innerHTML;
-            generateBtn.innerHTML = '<span class="loading"></span>Generating...';
-            generateBtn.disabled = true;
-            
-            // Convert file to base64
-            fileToBase64(currentFile)
-                .then(base64 => {
-                    // Prepare the request to the Cloud Function
-                    const requestData = {
+            let allResults = [];
+
+            for (let i = 0; i < filesToProcess.length; i++) {
+                const chunkFile = filesToProcess[i];
+                updateStatus(`Processing part ${i + 1} of ${filesToProcess.length}... (File: ${chunkFile.name})`, false);
+
+                try {
+                    const base64 = await fileToBase64(chunkFile);
+                    
+                    let requestBody = {
                         base64Data: base64,
-                        mimeType: currentFile.type,
-                        isVideo: isEffectivelyVideo(currentFile),
-                        fileName: currentFile.name,
-                        fileSize: currentFile.size
+                        mimeType: chunkFile.type,
+                        isVideo: isEffectivelyVideo(chunkFile),
+                        fileName: originalFile.name + (filesToProcess.length > 1 ? `_part${i+1}` : ''),
+                        fileSize: chunkFile.size,
+                        isChunk: filesToProcess.length > 1,
+                        chunkIndex: i + 1,
+                        totalChunks: filesToProcess.length
                     };
-                    
-                    // Add video metadata if available and it's an actual video element
-                    if (currentFile.type.startsWith('video/') && currentMediaElement && currentMediaElement instanceof HTMLVideoElement) {
-                        requestData.videoDuration = currentMediaElement.duration || 0;
-                        requestData.videoWidth = currentMediaElement.videoWidth || 0;
-                        requestData.videoHeight = currentMediaElement.videoHeight || 0;
+
+                    if (originalFile.type.startsWith('video/') && currentMediaElement instanceof HTMLVideoElement) {
+                        requestBody.videoDuration = currentMediaElement.duration || 0;
+                        requestBody.videoWidth = currentMediaElement.videoWidth || 0;
+                        requestBody.videoHeight = currentMediaElement.videoHeight || 0;
                     }
-                    
-                    return fetch(CLOUD_FUNCTION_URL, {
+
+                    if (generationType === 'captions') {
+                        requestBody.action = 'generateCaptions';
+                    }
+
+                    console.log(`Sending request for part ${i+1}/${filesToProcess.length}, type: ${generationType}, name: ${requestBody.fileName}`);
+                    const response = await fetch(CLOUD_FUNCTION_URL, {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify(requestData)
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(requestBody)
                     });
-                })
-                .then(response => {
+
+                    let errorMsgForToast = '';
                     if (!response.ok) {
-                        throw new Error(`Server error: ${response.status} ${response.statusText}`);
+                        let errorDetail = `Server error for part ${i+1}: ${response.status} ${response.statusText}`;
+                        try {
+                            const errData = await response.json();
+                            errorDetail = errData.error || (errData.details ? JSON.stringify(errData.details).substring(0,200) : errorDetail);
+                            if (errorDetail.toLowerCase().includes('too large') || response.status === 413 || errorDetail.toLowerCase().includes('request entity too large') || errorDetail.toLowerCase().includes('payload too large')) {
+                                errorDetail = `Part ${i+1} is too large for the server (max ${SINGLE_FILE_UPLOAD_LIMIT / (1024*1024)}MB).`;
+                                errorMsgForToast = errorDetail; 
+                            } else if (response.status === 503 || response.status === 504) {
+                                errorDetail = `Server is busy or timed out for part ${i+1}. Please try again shortly.`;
+                                errorMsgForToast = errorDetail;
+                            }
+                        } catch (e) { /* ignore parsing error, use original statusText */ }
+                        throw new Error(errorDetail);
                     }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data.altText) {
-                        // Success - update the result and enable copy button
-                        updateResult(data.altText);
-                        updateStatus('Alt text generated successfully!', false);
-                        copyBtn.disabled = false;
-                        showToast('Alt text generated successfully!', 'success');
-                    } else if (data.error) {
-                        // Error from server - data.error might be the raw message
-                        let displayErrorMessage = data.error;
-                        if (typeof data.error === 'string' &&
-                            (data.error.toLowerCase().includes('too large') ||
-                             data.error.toLowerCase().includes('request entity too large') ||
-                             data.error.toLowerCase().includes('payload too large') ||
-                             data.error.toLowerCase().includes('message length exceeded'))) {
-                            // Attempt to get MAX_FILE_SIZE, default if not found (though it should be defined)
-                            const fileSizeMB = typeof MAX_FILE_SIZE !== 'undefined' ? MAX_FILE_SIZE / (1024 * 1024) : 20;
-                            displayErrorMessage = `Server error: File exceeds size limits (max ${fileSizeMB}MB). Please use a smaller file.`;
+
+                    const apiResponseData = await response.json();
+
+                    if (generationType === 'altText') {
+                        if (apiResponseData.altText) {
+                            allResults.push({ type: 'altText', content: apiResponseData.altText });
+                        } else if (apiResponseData.error) {
+                            throw new Error(`Server error (altText) on part ${i+1}: ${apiResponseData.error}`);
+                        } else {
+                            throw new Error(`Unexpected server response (altText) for part ${i+1}`);
                         }
-                        updateStatus(`Error: ${displayErrorMessage}`, true);
-                        updateResult('');
-                        showToast(displayErrorMessage, 'error');
+                    } else { // captions
+                        if (apiResponseData.vttContent) {
+                            allResults.push({ type: 'caption', content: apiResponseData.vttContent });
+                        } else if (apiResponseData.error) { // Corrected: api_response_data to apiResponseData
+                            throw new Error(`Server error (captions) on part ${i+1}: ${apiResponseData.error}`);
+                        } else {
+                            throw new Error(`Unexpected server response (captions) for part ${i+1}`);
+                        }
+                    }
+                     updateStatus(`Part ${i + 1} of ${filesToProcess.length} processed successfully.`, false);
+
+                } catch (error) {
+                    console.error(`Error processing part ${i + 1}:`, error);
+                    const displayError = errorMsgForToast || error.message.substring(0, 250);
+                    updateStatus(`Error on part ${i + 1}: ${displayError}`, true);
+                    showToast(`Error on part ${i+1}: ${displayError}`, 'error', 7000);
+                    
+                    originalBtn.innerHTML = originalBtnText;
+                    // Re-enable buttons based on whether a file is still selected and processable
+                    if (originalFile) {
+                        const canProcessOriginal = originalFile.size <= SINGLE_FILE_UPLOAD_LIMIT || (ffmpeg && ffmpeg.loaded);
+                        originalBtn.disabled = !canProcessOriginal;
+                        if (originalFile.type.startsWith('video/') && canProcessOriginal) {
+                            otherBtn.disabled = false; 
+                            captionBtn.style.display = 'block';
+                        } else {
+                            otherBtn.disabled = true;
+                            if (otherBtn === captionBtn) captionBtn.style.display = 'none';
+                        }
                     } else {
-                        // Unexpected response
-                        updateStatus('Unexpected response from server', true);
-                        updateResult('');
-                        showToast('Unexpected response from server', 'error');
+                        originalBtn.disabled = true;
+                        otherBtn.disabled = true;
+                        if (otherBtn === captionBtn) captionBtn.style.display = 'none';
                     }
-                })
-                .catch(error => {
-                    console.error('Error generating alt text:', error);
-                    
-                    let errorMessage = error.message;
-                    if (error.name === 'AbortError') {
-                        errorMessage = 'Request timed out after several minutes. The media may be too complex to process or the server is busy.';
-                    } else if (error.message.includes('network') || error.message.includes('fetch')) {
-                        errorMessage = 'Network error. Please check your connection and try again.';
-                    } else if (error.message.includes('413') || 
-                               error.message.toLowerCase().includes('too large') || 
-                               error.message.toLowerCase().includes('request entity too large') ||
-                               error.message.toLowerCase().includes('payload too large') ||
-                               error.message.toLowerCase().includes('message length exceeded')) {
-                        errorMessage = `Server error: File exceeds size limits (max ${MAX_FILE_SIZE / (1024 * 1024)}MB). Please use a smaller file.`;
+                    return; 
+                }
+            }
+
+            if (allResults.length > 0) {
+                stitchAndDisplayResults(allResults, generationType);
+            } else if (filesToProcess.length > 0) { 
+                 updateStatus('Processing complete, but no results were returned from the server.', true);
+                 resultBox.innerHTML = '<p style="color: var(--error-color);">No results generated. The server might be busy or the media couldn\'t be analyzed.</p>';
+                 showToast('No results were generated by the server.', 'error');
+            } else { 
+                updateStatus('No media parts to process (e.g., chunking may have failed)..', true);
+            }
+
+            originalBtn.innerHTML = originalBtnText;
+            // Re-enable buttons after successful completion or if no results were generated but processing didn't hard fail mid-loop
+             if (originalFile) {
+                const canProcessOriginal = originalFile.size <= SINGLE_FILE_UPLOAD_LIMIT || (ffmpeg && ffmpeg.loaded);
+                originalBtn.disabled = !canProcessOriginal;
+                if (originalFile.type.startsWith('video/') && canProcessOriginal) {
+                    otherBtn.disabled = false; 
+                    captionBtn.style.display = 'block';
+                } else {
+                    otherBtn.disabled = true;
+                    if (otherBtn === captionBtn) captionBtn.style.display = 'none';
+                }
+            } else {
+                originalBtn.disabled = true;
+                otherBtn.disabled = true;
+                if (otherBtn === captionBtn) captionBtn.style.display = 'none';
+            }
+        }
+
+        function stitchAndDisplayResults(results, generationType) {
+            if (generationType === 'altText') {
+                let combinedAltText = results.map(r => r.content).join(" ").trim();
+                if (combinedAltText.length > ALT_TEXT_MAX_LENGTH) {
+                    let truncationPoint = combinedAltText.lastIndexOf('.', ALT_TEXT_MAX_LENGTH - 7); // -7 for " (...) "
+                    if (truncationPoint < ALT_TEXT_MAX_LENGTH * 0.6 || truncationPoint === -1) { 
+                        combinedAltText = combinedAltText.substring(0, ALT_TEXT_MAX_LENGTH - 7) + "... (...)";
+                    } else {
+                        combinedAltText = combinedAltText.substring(0, truncationPoint + 1) + " (...) ";
                     }
-                    
-                    updateStatus(`Error: ${errorMessage}`, true);
-                    updateResult('');
-                    showToast(errorMessage, 'error');
-                })
-                .finally(() => {
-                    // Restore button state
-                    generateBtn.innerHTML = originalBtnText;
-                    generateBtn.disabled = false;
-                });
+                    showToast('Combined alt text was long and has been summarized/truncated.', 'warning', 4000);
+                }
+                updateResult(combinedAltText);
+                updateStatus(`Alt text generated from ${results.length} part(s).`, false);
+                copyBtn.disabled = !combinedAltText;
+                if (combinedAltText) {
+                    showToast('Alt text generated!', 'success');
+                } else {
+                    showToast('Alt text generation resulted in empty text.', 'warning');
+                    resultBox.innerHTML = '<p style="color: #666;">Generated alt text is empty.</p>';
+                }
+            } else { // captions
+                const baseFileName = originalFile.name.substring(0, originalFile.name.lastIndexOf('.') ) || originalFile.name;
+                if (results.length === 1) {
+                    downloadVTTFile(results[0].content, `captions-${baseFileName}.vtt`);
+                    updateStatus('Captions generated and downloaded!', false);
+                    showToast('Captions generated and downloaded!', 'success');
+                } else {
+                    results.forEach((result, index) => {
+                        downloadVTTFile(result.content, `captions_part${index + 1}-${baseFileName}.vtt`);
+                    });
+                    updateStatus(`Captions for ${results.length} parts generated and downloaded individually.`, false);
+                    showToast(`Captions for ${results.length} parts downloaded. Manual stitching may be required.`, 'warning', 5000);
+                }
+                resultBox.innerHTML = `<p style="color: #666;">Caption file(s) have been downloaded. Check your downloads folder.</p>`;
+            }
+        }
+
+        // FFmpeg utility functions
+        async function optimizeImageWithFFmpeg(inputFile) {
+            if (!ffmpeg || !ffmpeg.loaded) {
+                showToast('FFmpeg not available for image optimization. Please wait or reload.', 'error');
+                // Attempt to load it again if user clicks, might be useful if initial auto-load failed
+                if (!ffmpeg) loadFFmpeg().then(f => { if(f && f.loaded) showToast('FFmpeg now loaded, please try again.', 'success'); }); 
+                return null;
+            }
+            updateStatus('Optimizing large image... This may take a moment.', false);
+            const genBtnCurrentText = generateBtn.innerHTML;
+            const capBtnDisabledState = captionBtn.disabled;
+            generateBtn.innerHTML = '<span class="loading"></span>Optimizing...';
+            generateBtn.disabled = true;
+            captionBtn.disabled = true;
+
+            try {
+                const inputFileName = `input_${Date.now()}_${inputFile.name}`;
+                const outputFileName = `optimized_${Date.now()}_${inputFile.name.split('.')[0] || inputFile.name}.jpg`;
+
+                await ffmpeg.writeFile(inputFileName, await FFmpeg.fetchFile(inputFile));
+                
+                await ffmpeg.exec([
+                    '-i', inputFileName,
+                    '-vf', 'scale=w=min(2048\\,iw):h=min(2048\\,ih):force_original_aspect_ratio=decrease',
+                    '-q:v', '3', 
+                    outputFileName
+                ]);
+
+                const data = await ffmpeg.readFile(outputFileName);
+                await ffmpeg.deleteFile(inputFileName);
+                await ffmpeg.deleteFile(outputFileName);
+
+                const optimizedBlob = new Blob([data.buffer], { type: 'image/jpeg' });
+                const optimizedFile = new File([optimizedBlob], outputFileName, { type: 'image/jpeg' });
+
+                if (optimizedFile.size > SINGLE_FILE_UPLOAD_LIMIT) {
+                    showToast(`Optimized image is still too large (${(optimizedFile.size / (1024*1024)).toFixed(1)}MB). Try a smaller original.`, 'error', 5000);
+                    updateStatus('Optimized image still too large.', true);
+                    return null;
+                }
+                
+                updateStatus('Image optimized successfully.', false);
+                showToast('Large image has been optimized.', 'success');
+                return optimizedFile;
+
+            } catch (error) {
+                console.error('Error optimizing image with FFmpeg:', error);
+                const errorMsg = typeof error === 'string' ? error : error.message;
+                updateStatus(`Error optimizing image: ${errorMsg.substring(0,100)}`, true);
+                showToast(`Error optimizing image: ${errorMsg.substring(0,100)}`, 'error', 5000);
+                return null;
+            } finally {
+                generateBtn.innerHTML = genBtnCurrentText;
+                // Restore button states based on originalFile
+                if (originalFile) {
+                    const canProcessOriginal = originalFile.size <= SINGLE_FILE_UPLOAD_LIMIT || (ffmpeg && ffmpeg.loaded);
+                    generateBtn.disabled = !canProcessOriginal;
+                    if (originalFile.type.startsWith('video/') && canProcessOriginal) {
+                        captionBtn.disabled = false;
+                        captionBtn.style.display = 'block';
+                    } else {
+                        captionBtn.disabled = true;
+                        captionBtn.style.display = 'none';
+                    }
+                } else { // No file selected, disable all
+                    generateBtn.disabled = true;
+                    captionBtn.disabled = true;
+                    captionBtn.style.display = 'none';
+                }
+            }
+        }
+
+        async function chunkFileWithFFmpeg(inputFile) {
+            if (!ffmpeg || !ffmpeg.loaded) {
+                showToast('FFmpeg not available for chunking. Please wait or reload.', 'error');
+                 if (!ffmpeg) loadFFmpeg().then(f => { if(f && f.loaded) showToast('FFmpeg now loaded, please try again.', 'success'); }); 
+                return null;
+            }
+            updateStatus(`Preparing to chunk ${inputFile.name}... This may take some time.`, false);
+            const genBtnCurrentText = generateBtn.innerHTML;
+            const capBtnDisabledState = captionBtn.disabled;
+            generateBtn.innerHTML = '<span class="loading"></span>Chunking...';
+            generateBtn.disabled = true;
+            captionBtn.disabled = true;
+
+            const chunks = [];
+            const inputFileName = `input_${Date.now()}_${inputFile.name}`;
+            const baseOutputName = `chunk_${Date.now()}_${inputFile.name.split('.')[0] || inputFile.name}`;
+            const fileExtension = inputFile.name.includes('.') ? inputFile.name.substring(inputFile.name.lastIndexOf('.')) : (inputFile.type.startsWith('video/') ? '.mp4' : '.gif');
+
+            let ffmpegLogOutput = "";
+            const logListener = ({ type, message }) => { 
+                ffmpegLogOutput += message + "\n"; 
+                // console.log(`ffmpeg [${type}]: ${message}`); // Optional: for more verbose logging during dev
+            };
+            ffmpeg.on('log', logListener);
+
+            try {
+                await ffmpeg.writeFile(inputFileName, await FFmpeg.fetchFile(inputFile));
+
+                let durationSeconds = 0;
+                ffmpegLogOutput = ""; // Clear before exec
+                try { 
+                    await ffmpeg.exec(['-i', inputFileName, '-f', 'null', '-']); 
+                } catch (e) { /* Expected to 'fail' for info, logs captured */ }
+
+                const durationMatch = ffmpegLogOutput.match(/Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2,3})/);
+                if (durationMatch) {
+                    durationSeconds = parseInt(durationMatch[1])*3600 + parseInt(durationMatch[2])*60 + parseInt(durationMatch[3]) + parseFloat("0." + durationMatch[4]);
+                } else {
+                    console.warn("Could not parse media duration from ffmpeg output for chunking.");
+                     if (inputFile.type.startsWith('video/')) { 
+                        showToast('Could not determine video duration for precise chunking. Attempting basic split.', 'warning');
+                     }
+                }
+
+                if (durationSeconds > 0 && inputFile.type.startsWith('video/')) { 
+                    const avgBitrate = (inputFile.size * 8) / durationSeconds;
+                    let segmentDuration = Math.floor((SINGLE_FILE_UPLOAD_LIMIT * 0.90 * 8) / avgBitrate);
+                    segmentDuration = Math.max(10, Math.min(segmentDuration, 300)); 
+
+                    let startTime = 0;
+                    for (let i = 0; startTime < durationSeconds; i++) {
+                        const chunkOutputName = `${baseOutputName}_part${i + 1}${fileExtension}`;
+                        let currentSegmentDuration = Math.min(segmentDuration, durationSeconds - startTime);
+                        if (currentSegmentDuration < 1 && (durationSeconds - startTime) > 0.1) currentSegmentDuration = durationSeconds - startTime;
+                        if (currentSegmentDuration <= 0.1 && i > 0) break;
+
+                        updateStatus(`Preparing chunk ${i + 1}: from ${startTime.toFixed(1)}s for ${currentSegmentDuration.toFixed(1)}s`, false);
+                        ffmpegLogOutput = ""; // Clear for exec
+                        await ffmpeg.exec([
+                            '-ss', '' + startTime,
+                            '-i', inputFileName,
+                            '-t', '' + currentSegmentDuration,
+                            '-c', 'copy', 
+                            '-avoid_negative_ts', 'make_zero',
+                            chunkOutputName
+                        ]);
+                        
+                        let data = await ffmpeg.readFile(chunkOutputName);
+                        let chunkFile = new File([data.buffer], chunkOutputName, { type: inputFile.type });
+
+                        if (chunkFile.size > SINGLE_FILE_UPLOAD_LIMIT * 1.05) { 
+                            console.warn(`Codec copy for chunk ${i+1} too large (${(chunkFile.size/(1024*1024)).toFixed(1)}MB). Re-encoding with size limit.`);
+                            await ffmpeg.deleteFile(chunkOutputName);
+                            ffmpegLogOutput = ""; // Clear for exec
+                            await ffmpeg.exec([
+                                '-ss', '' + startTime,
+                                '-i', inputFileName,
+                                '-t', '' + currentSegmentDuration,
+                                '-fs', '' + SINGLE_FILE_UPLOAD_LIMIT, 
+                                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', 
+                                '-c:a', 'aac', '-b:a', '96k',
+                                '-avoid_negative_ts', 'make_zero',
+                                chunkOutputName
+                            ]);
+                            data = await ffmpeg.readFile(chunkOutputName);
+                            chunkFile = new File([data.buffer], chunkOutputName, { type: inputFile.type }); 
+                            if (chunkFile.size > SINGLE_FILE_UPLOAD_LIMIT * 1.05) { 
+                                 await ffmpeg.deleteFile(chunkOutputName);
+                                 throw new Error(`Re-encoded chunk ${i+1} still too large after attempting size limit.`);
+                            }
+                        }
+                        
+                        chunks.push(chunkFile);
+                        await ffmpeg.deleteFile(chunkOutputName);
+                        startTime += currentSegmentDuration;
+                        if (chunks.length >= 15) { 
+                            showToast('Media resulted in too many chunks (>15). Stopping segmentation.', 'warning'); break;
+                        }
+                    }
+                } else { 
+                    console.log('Attempting single chunk size-based split (e.g. for GIFs, or videos with no duration).');
+                    const chunkOutputName = `${baseOutputName}_part1${fileExtension}`;
+                    ffmpegLogOutput = ""; // Clear for exec
+                    await ffmpeg.exec([
+                        '-i', inputFileName,
+                        '-fs', '' + SINGLE_FILE_UPLOAD_LIMIT, 
+                        '-c', 'copy', 
+                        chunkOutputName
+                    ]);
+                    try {
+                        const data = await ffmpeg.readFile(chunkOutputName);
+                        const singleChunk = new File([data.buffer], chunkOutputName, { type: inputFile.type });
+                        if (singleChunk.size > 0) chunks.push(singleChunk);
+                        await ffmpeg.deleteFile(chunkOutputName);
+                        if (chunks.length > 0 && singleChunk.size < inputFile.size * 0.90 && inputFile.size > SINGLE_FILE_UPLOAD_LIMIT * 1.1) { 
+                             showToast('Media was processed as a single part. Result might be partial if very large.', 'warning', 6000);
+                        }
+                    } catch (e) {
+                        console.error('Failed size-based split attempt:', e);
+                        throw new Error('Failed to create even a single size-limited part from the media.');
+                    }
+                }
+
+                await ffmpeg.deleteFile(inputFileName);
+
+            } catch (error) {
+                console.error('Error chunking file with FFmpeg:', error);
+                const errorMsg = typeof error === 'string' ? error : error.message;
+                updateStatus(`Error chunking file: ${errorMsg.substring(0,100)}`, true);
+                showToast(`Error chunking file: ${errorMsg.substring(0,100)}`, 'error', 5000);
+                return null;
+            } finally {
+                ffmpeg.off('log', logListener);
+                generateBtn.innerHTML = genBtnCurrentText;
+                 // Restore button states based on originalFile
+                if (originalFile) {
+                    const canProcessOriginal = originalFile.size <= SINGLE_FILE_UPLOAD_LIMIT || (ffmpeg && ffmpeg.loaded);
+                    generateBtn.disabled = !canProcessOriginal;
+                    if (originalFile.type.startsWith('video/') && canProcessOriginal) {
+                        captionBtn.disabled = false;
+                        captionBtn.style.display = 'block';
+                    } else {
+                        captionBtn.disabled = true;
+                        captionBtn.style.display = 'none';
+                    }
+                } else { // No file selected, disable all
+                    generateBtn.disabled = true;
+                    captionBtn.disabled = true;
+                    captionBtn.style.display = 'none';
+                }
+            }
+
+            if (chunks.length === 0 && inputFile.size > 0) {
+                updateStatus('No chunks were created. The media might be too short or an unrecoverable issue occurred.', true);
+                showToast('Failed to create any processable parts from the media.', 'error');
+                return null;
+            }
+            updateStatus(`File prepared into ${chunks.length} part(s). Ready to process.`, false);
+            return chunks;
         }
         
-        // Helper function to update the result text area (ONLY for alt text, not status messages)
+        // Helper function to update the result text area
         function updateResult(text) {
             if (text && text.trim()) {
                 resultBox.innerHTML = `<p>${text.replace(/\n/g, '<br>')}</p>`;
@@ -523,127 +971,8 @@
             }
         }
         
-        // Generate captions for videos
-        async function generateCaptions() {
-            if (!currentFile || !currentFile.type.startsWith('video/') || !currentMediaElement) {
-                showToast('No valid video selected', 'error');
-                return;
-            }
-            
-            if (!(currentMediaElement instanceof HTMLVideoElement)) {
-                showToast('Invalid video element', 'error');
-                return;
-            }
-            
-            // Show loading state
-            const originalBtnText = captionBtn.innerHTML;
-            captionBtn.innerHTML = '<span class="loading"></span>Generating...';
-            captionBtn.disabled = true;
-            
-            try {
-                // Update status
-                updateStatus('Analyzing video for captions. This may take several minutes...');
-                
-                // Convert to base64
-                const base64Data = await fileToBase64(currentFile);
-                const mimeType = currentFile.type;
-                
-                // Prepare request body
-                const requestBody = {
-                    action: 'generateCaptions',
-                    base64Data: base64Data,
-                    mimeType: mimeType,
-                    duration: currentMediaElement.duration || 0,
-                    fileName: currentFile.name
-                };
-                
-                // Set timeout for the request
-                const timeoutDuration = 300000; // 5 minutes for transcription
-                let timeoutId;
-                
-                try {
-                    // Create an AbortController to handle timeout
-                    const controller = new AbortController();
-                    const signal = controller.signal;
-                    
-                    // Set timeout
-                    timeoutId = setTimeout(() => {
-                        controller.abort();
-                    }, timeoutDuration);
-                    
-                    // Show a processing timer for large videos
-                    let processingTime = 0;
-                    const processingTimer = setInterval(() => {
-                        processingTime += 15;
-                        updateStatus(`Still analyzing video for captions... (${processingTime} seconds elapsed)`);
-                    }, 15000); // Update every 15 seconds
-                    
-                    // Call the proxy function
-                    console.log(`Sending video data for caption generation, size: ${(base64Data.length / (1024 * 1024)).toFixed(2)}MB`);
-                    
-                    const response = await fetch(CLOUD_FUNCTION_URL, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify(requestBody),
-                        signal
-                    });
-                    
-                    // Clear timers
-                    clearTimeout(timeoutId);
-                    clearInterval(processingTimer);
-                    
-                    if (!response.ok) {
-                        const errorData = await response.json().catch(() => ({ error: `Error ${response.status}: ${response.statusText}` }));
-                        throw new Error(errorData.error || `Error ${response.status}: ${response.statusText}`);
-                    }
-                    
-                    const data = await response.json();
-                    
-                    if (data.vttContent) {
-                        // Download the VTT file
-                        downloadVTTFile(data.vttContent);
-                        
-                        updateStatus('', false);
-                        updateStatus('Captions generated and downloaded!', false);
-                        showToast('Captions generated and downloaded!', 'success');
-                    } else {
-                        throw new Error('No caption data received from server');
-                    }
-                } catch (error) {
-                    clearTimeout(timeoutId);
-                    
-                    let errorMessage = error.message;
-                    if (error.name === 'AbortError') {
-                        errorMessage = 'Caption generation timed out. The video may be too complex to process.';
-                    } else if (error.message.includes('413') ||
-                               error.message.toLowerCase().includes('too large') ||
-                               error.message.toLowerCase().includes('request entity too large') ||
-                               error.message.toLowerCase().includes('payload too large') ||
-                               error.message.toLowerCase().includes('message length exceeded')) {
-                        errorMessage = `Server error: File exceeds size limits (max ${MAX_FILE_SIZE / (1024 * 1024)}MB). Please use a smaller file.`;
-                    }
-                    
-                    updateStatus(`Caption generation error: ${errorMessage}`, true);
-                    resultBox.innerHTML = `<p style="color: var(--error-color);">Caption generation error: ${errorMessage}</p>`;
-                    showToast(errorMessage, 'error');
-                }
-            } catch (error) {
-                console.error('Error generating captions:', error);
-                updateStatus(`Error: ${error.message}`, true);
-                resultBox.innerHTML = `<p style="color: var(--error-color);">Error: ${error.message}</p>`;
-                showToast(`Error: ${error.message}`, 'error');
-            } finally {
-                // Restore button
-                captionBtn.innerHTML = originalBtnText;
-                captionBtn.disabled = false;
-            }
-        }
-        
         // Helper function to download the VTT file
-        function downloadVTTFile(vttContent) {
-            const filename = `captions-${Date.now()}.vtt`;
+        function downloadVTTFile(vttContent, filename = `captions-${originalFile ? originalFile.name.split('.')[0] : Date.now()}.vtt`) {
             const blob = new Blob([vttContent], { type: 'text/vtt' });
             const url = URL.createObjectURL(blob);
             
@@ -660,68 +989,13 @@
             }, 100);
         }
         
-        // Extract a frame from a video element
-        async function extractVideoFrame(videoElement) {
-            return new Promise((resolve, reject) => {
-                if (!videoElement || !(videoElement instanceof HTMLVideoElement)) {
-                    return reject(new Error('Invalid video element'));
-                }
-                
-                // Make sure video has loaded metadata
-                if (videoElement.readyState < 2) {
-                    videoElement.addEventListener('loadeddata', onVideoReady);
-                } else {
-                    extractFrame();
-                }
-                
-                function onVideoReady() {
-                    videoElement.removeEventListener('loadeddata', onVideoReady);
-                    extractFrame();
-                }
-                
-                function extractFrame() {
-                    try {
-                        // Create canvas and draw video frame
-                        const canvas = document.createElement('canvas');
-                        // Seek to 1 second or 10% of duration, whichever is less
-                        const seekTime = Math.min(1, videoElement.duration * 0.1);
-                        
-                        // Set video to the desired time
-                        videoElement.currentTime = seekTime;
-                        
-                        // Once we've seeked, draw the frame
-                        videoElement.addEventListener('seeked', function onSeeked() {
-                            videoElement.removeEventListener('seeked', onSeeked);
-                            
-                            // Set canvas dimensions to video dimensions
-                            canvas.width = videoElement.videoWidth;
-                            canvas.height = videoElement.videoHeight;
-                            
-                            // Draw video frame to canvas
-                            const ctx = canvas.getContext('2d');
-                            ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-                            
-                            // Convert canvas to base64
-                            try {
-                                const base64Data = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
-                                resolve(base64Data);
-                            } catch (e) {
-                                reject(e);
-                            }
-                        });
-                    } catch (e) {
-                        reject(e);
-                    }
-                }
-            });
-        }
-        
         // Helper function to convert file to base64
         function fileToBase64(file) {
             return new Promise((resolve, reject) => {
-                // Update UI to show we're processing
-                if (file.size > 10 * 1024 * 1024) {
-                    updateStatus('Converting large file to base64. This may take a moment...', true);
+                // Update UI to show we're processing, especially for larger chunks.
+                const sizeMB = file.size / (1024 * 1024);
+                if (sizeMB > 5) { // Show status for chunks/files over 5MB
+                    updateStatus(`Converting file part (${sizeMB.toFixed(1)}MB) to base64...`, false);
                 }
                 
                 const reader = new FileReader();
@@ -738,12 +1012,12 @@
                 reader.onprogress = (event) => {
                     if (event.lengthComputable) {
                         const percentLoaded = Math.round((event.loaded / event.total) * 100);
-                        if (file.size > 2 * 1024 * 1024) { // Show progress for files > 2MB
-                            updateStatus(`Preparing file: ${percentLoaded}% complete`, true);
+                        if (sizeMB > 2) { // Show progress for parts > 2MB
+                            updateStatus(`Preparing file part: ${percentLoaded}% complete`, false); // Not an error state
                             
                             // Log progress for debugging large files
-                            if (percentLoaded % 25 === 0 || percentLoaded === 99) {
-                                console.log(`File preparation: ${percentLoaded}% complete (${(event.loaded / (1024 * 1024)).toFixed(2)}MB / ${(event.total / (1024 * 1024)).toFixed(2)}MB)`);
+                            if (percentLoaded % 25 === 0 || percentLoaded === 99 || percentLoaded === 100) {
+                                console.log(`File part preparation: ${percentLoaded}% complete (${(event.loaded / (1024 * 1024)).toFixed(2)}MB / ${sizeMB.toFixed(2)}MB)`);
                             }
                         }
                     }
@@ -768,11 +1042,8 @@
         
         // Show toast notification
         function showToast(message, type = 'success', duration = 3000) {
-            // Remove any existing toasts
-            const existingToast = document.querySelector('.toast');
-            if (existingToast) {
-                existingToast.remove();
-            }
+            // Remove any existing toasts quickly
+            document.querySelectorAll('.toast').forEach(t => t.remove());
             
             const toast = document.createElement('div');
             toast.className = `toast ${type}`;
@@ -800,15 +1071,22 @@
     <!-- Service Worker Registration -->
     <script>
         if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/service-worker.js')
-                    .then(registration => {
-                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
-                    })
-                    .catch(error => {
-                        console.log('ServiceWorker registration failed: ', error);
-                    });
+            window.addEventListener('load', async () => { // Make async for ffmpeg load
+                try {
+                    const registration = await navigator.serviceWorker.register('/service-worker.js');
+                    console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                } catch (error) {
+                    console.log('ServiceWorker registration failed: ', error);
+                }
+                
+                // Try to load FFmpeg on page load, non-blocking for UI
+                loadFFmpeg().catch(err => console.warn("Initial FFmpeg load attempt failed:", err));
             });
+        } else {
+            // If no service worker, still load ffmpeg on window load
+             window.addEventListener('load', async () => {
+                loadFFmpeg().catch(err => console.warn("Initial FFmpeg load attempt failed (no SW):", err));
+             });
         }
     </script>
 </body>

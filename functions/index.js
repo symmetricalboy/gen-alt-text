@@ -33,6 +33,7 @@ const ALLOWED_SAFARI_ORIGIN_PREFIX = 'safari-web-extension://';
 const ALLOWED_FIREFOX_ORIGIN_PREFIX = 'moz-extension://';
 // Web app domains
 const ALLOWED_WEB_APP_ORIGIN = 'https://alttext.symm.app';
+const ALLOWED_DEV_WEB_APP_ORIGIN = 'https://alttextdev.symm.app'; // Added for dev environment
 // Local development origins
 const ALLOWED_LOCAL_ORIGINS = [
     'http://localhost:8080',
@@ -46,6 +47,7 @@ const ALLOWED_LOCAL_ORIGINS = [
 const allowedFullOrigins = [
     ALLOWED_CHROME_ORIGIN,
     ALLOWED_WEB_APP_ORIGIN,
+    ALLOWED_DEV_WEB_APP_ORIGIN, // Added for dev environment
     ...ALLOWED_LOCAL_ORIGINS,
     // Add other specific origins if needed, e.g., for testing environments
 ];

@@ -20,12 +20,17 @@ try {
 
 // See https://wxt.dev/api/config.html
 export default defineConfig({
+  // Remove the imports section for now as it's causing issues
   vite: () => ({
     plugins: [react()],
     // Define environment variables here
     define: {
       'import.meta.env.VITE_CLOUD_FUNCTION_URL': JSON.stringify(CLOUD_FUNCTION_URL),
     },
+    // Add sourcemap: false to prevent issues with Vue hot reloading
+    build: {
+      sourcemap: false
+    }
   }),
   manifest: ({ browser, manifestVersion, mode, command }) => ({
     name: `Bluesky Alt Text Generator`, // Indicate Dev mode
@@ -48,11 +53,23 @@ export default defineConfig({
       cloudFunctionOrigin // Use the derived origin pattern
     ],
     
+    // Content Security Policy
+    content_security_policy: {
+      extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';",
+      // sandbox: "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval'; child-src 'self';" // if you use sandboxed pages
+    },
+
     // Web accessible resources for icon usage in content scripts
     web_accessible_resources: [
       {
-        resources: ['icons/*', 'assets/*'], // Explicitly add assets/*
+        resources: ['icons/*', 'assets/*', 'assets/ffmpeg/*'], // Added assets/ffmpeg/*
         matches: ['*://*.bsky.app/*']
+      },
+      // Make FFmpeg core files accessible for loading by the FFmpeg library itself
+      {
+        resources: ['assets/ffmpeg/ffmpeg-core.wasm', 'assets/ffmpeg/ffmpeg-core.worker.js'], // Be explicit if needed
+        matches: ['<all_urls>'], // Or more restrictively, the extension's own origin
+        use_dynamic_url: true // Important for some browsers/setups with Wasm
       }
     ],
     
