@@ -24,12 +24,12 @@ async function getFFmpegInstance() {
     loadInProgress = true;
     loadPromise = new Promise(async (resolve, reject) => {
         try {
-            if (!self.FFmpeg || !self.FFmpeg.FFmpeg) {
-                console.error('[Offscreen] self.FFmpeg or self.FFmpeg.FFmpeg is not available. Ensure ffmpeg.min.js is loaded and FFMPEG_MP is defined.');
-                throw new Error('FFmpeg library not available.');
+            if (!self.FFmpegWASM || !self.FFmpegWASM.FFmpeg) {
+                console.error('[Offscreen] self.FFmpegWASM or self.FFmpegWASM.FFmpeg is not available. Ensure ffmpeg.min.js is loaded.');
+                throw new Error('FFmpeg library (FFmpegWASM) not available on global scope.');
             }
-            console.log('[Offscreen] Creating new FFmpeg instance...');
-            const newInstance = new self.FFmpeg.FFmpeg();
+            console.log('[Offscreen] Creating new FFmpeg instance from self.FFmpegWASM.FFmpeg...');
+            const newInstance = new self.FFmpegWASM.FFmpeg();
             console.log('[Offscreen] FFmpeg instance created.');
 
             if (newInstance.setLogging) {
@@ -46,9 +46,9 @@ async function getFFmpegInstance() {
             });
             console.log('[Offscreen] Attached FFmpeg log listener.');
 
-            const corePath = browser.runtime.getURL('assets/ffmpeg/ffmpeg-core.js');
-            const wasmPath = browser.runtime.getURL('assets/ffmpeg/ffmpeg-core.wasm');
-            const workerPath = browser.runtime.getURL('assets/ffmpeg/ffmpeg-core.worker.js');
+            const corePath = chrome.runtime.getURL('assets/ffmpeg/ffmpeg-core.js');
+            const wasmPath = chrome.runtime.getURL('assets/ffmpeg/ffmpeg-core.wasm');
+            const workerPath = chrome.runtime.getURL('assets/ffmpeg/ffmpeg-core.worker.js');
 
             console.log('[Offscreen] FFmpeg core paths resolved:');
             console.log(`[Offscreen] Core JS URL: ${corePath}`);
@@ -87,13 +87,13 @@ async function loadFFmpegOnce() {
     loadAttempts++;
     console.log(`[Offscreen] Loading FFmpeg instance (attempt ${loadAttempts}/${MAX_LOAD_ATTEMPTS})...`);
 
-    if (!self.FFmpeg) {
-        console.error('[Offscreen] FFmpeg.js script not loaded on self/global! Cannot initialize.');
+    if (!self.FFmpegWASM) {
+        console.error('[Offscreen] FFmpeg.js script (FFmpegWASM) not loaded on self/global! Cannot initialize.');
         return false;
     }
     if (!ffmpegInstance) {
-        console.log('[Offscreen] new self.FFmpeg.FFmpeg() instance created.');
-        ffmpegInstance = new self.FFmpeg.FFmpeg();
+        console.log('[Offscreen] new self.FFmpegWASM.FFmpeg() instance created.');
+        ffmpegInstance = new self.FFmpegWASM.FFmpeg();
     }
 
     // Enable verbose logging for FFmpeg library
