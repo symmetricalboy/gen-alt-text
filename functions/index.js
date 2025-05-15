@@ -393,10 +393,17 @@ In a real implementation, we would analyze the actual video.`;
 
         // Get isVideo flag if present (helps with proper description prompting)
         const isVideo = req.body.isVideo === true;
-        // Check if this is a processed frame from a video (optimization for large videos)
-        const isVideoFrame = isVideo && mimeType.startsWith('image/');
+        
+        // Define animated image MIME types
+        const animatedImageMimeTypes = ['image/gif', 'image/webp', 'image/apng'];
+        const isAnimatedImage = animatedImageMimeTypes.includes(mimeType);
 
-        console.log(`Processing allowed request from origin: ${requestOrigin}, mimeType: ${mimeType}, data length: ${base64Data.length}, isVideo: ${isVideo}, isVideoFrame: ${isVideoFrame}`);
+        // isVideoFrame is true if the client flagged it as video-related,
+        // it's an image MIME type, BUT it's NOT one of the directly supported animated image types
+        // (implying it's a frame extracted from a non-natively-animated-image video type).
+        const isVideoFrame = isVideo && mimeType.startsWith('image/') && !isAnimatedImage;
+
+        console.log(`Processing allowed request from origin: ${requestOrigin}, mimeType: ${mimeType}, data length: ${base64Data.length}, isVideo: ${isVideo}, isAnimatedImage: ${isAnimatedImage}, isVideoFrame: ${isVideoFrame}`);
 
         // Add special handling for video frames
         let effectiveSystemInstructions = systemInstructions;

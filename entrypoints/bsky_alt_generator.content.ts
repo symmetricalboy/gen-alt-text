@@ -26,6 +26,15 @@ export default defineContentScript({
     // Define the mutation observer
     let manualModeObserver: MutationObserver | null = null;
     
+    // Helper function to determine if a file should be treated as video for processing
+    function isEffectivelyVideo(mimeType: string | undefined | null): boolean {
+        if (!mimeType) return false;
+        return mimeType.startsWith('video/') ||
+               mimeType === 'image/gif' ||
+               mimeType === 'image/webp' || // Assuming all webp could be animated
+               mimeType === 'image/apng';
+    }
+    
     // Toast notification system
     const createToast = (message: string, type: 'info' | 'success' | 'error' | 'warning' = 'info', duration: number = 8000) => {
       let toastContainer = document.getElementById('gemini-toast-container');
@@ -477,10 +486,10 @@ export default defineContentScript({
             return;
         }
 
-        const isVideo = mediaElement.tagName === 'VIDEO';
+        const initialIsVideoGuess = mediaElement.tagName === 'VIDEO';
         
         let isLargeVideo = false;
-        if (isVideo && mediaElement instanceof HTMLVideoElement) {
+        if (initialIsVideoGuess && mediaElement instanceof HTMLVideoElement) {
           try {
             const duration = mediaElement.duration || 0;
             const width = mediaElement.videoWidth || mediaElement.clientWidth;
@@ -503,7 +512,13 @@ export default defineContentScript({
           return;
         }
         
-        console.log(`[generateAndFillAltText] Got ${isVideo ? 'Video' : 'Image'} source (type: ${mediaSource.substring(0, mediaSource.indexOf(':'))}, length: ${mediaSource.length})`);
+        // Extract actual mimeType from the dataURL (mediaSource)
+        const actualMimeType = mediaSource.match(/^data:(.+?);base64,/)?.[1];
+        
+        // Determine the effective isVideo based on the actual mimeType
+        const effectiveIsVideo = isEffectivelyVideo(actualMimeType);
+        
+        console.log(`[generateAndFillAltText] Got ${effectiveIsVideo ? 'Video-like (e.g., GIF/WebM)' : 'Image'} source (type: ${actualMimeType || 'unknown'}, mime: ${actualMimeType}, length: ${mediaSource.length})`);
 
         return new Promise<void>((resolve, reject) => {
             const port = browser.runtime.connect({ name: "altTextGenerator" });
@@ -564,7 +579,7 @@ export default defineContentScript({
             
             // Check for large files and use direct upload if necessary
             const isLargeFile = mediaSource.length > 1000000; // Roughly 1MB in base64
-            if (isVideo && isLargeFile) {
+            if (effectiveIsVideo && isLargeFile) {
                  // This section was complex and seems to be part of a previous approach.
                  // For now, we'll simplify and send all media directly through the port.
                  // If issues persist with large videos, this direct upload logic might need to be revisited.
@@ -575,7 +590,7 @@ export default defineContentScript({
             port.postMessage({ 
               action: 'generateAltText', 
               mediaUrl: mediaSource, 
-              isVideo: isVideo,
+              isVideo: effectiveIsVideo, // Use the corrected effectiveIsVideo
               fileSize: mediaSource.length 
             }); 
             console.log('[generateAndFillAltText] Message sent.');

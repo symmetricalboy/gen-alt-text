@@ -142,11 +142,20 @@ export default defineBackground(() => {
       }
   }
 
+  // Helper function to determine if a file should be treated as video for processing
+  function isEffectivelyVideo(mimeType: string | undefined | null): boolean {
+      if (!mimeType) return false;
+      return mimeType.startsWith('video/') ||
+             mimeType === 'image/gif' ||
+             mimeType === 'image/webp' || // Assuming all webp could be animated
+             mimeType === 'image/apng';
+  }
+
   // --- Alt Text Generation Logic (Modified to call Proxy) ---
   async function generateAltTextViaProxy(
     source: string, // Expecting Data URL from content script
-    isVideo: boolean, // Keep this, might be useful later
-    isLargeVideo: boolean = false // Flag for handling large videos
+    initialIsVideoHint: boolean, // Hint from the caller
+    isLargeVideoHint: boolean = false // Flag for handling large videos, also a hint
   ): Promise<PortResponse> { // Return type matches PortResponse
       if (!CLOUD_FUNCTION_URL || CLOUD_FUNCTION_URL === 'YOUR_FUNCTION_URL_HERE') {
           console.error('Cannot generate alt text: Cloud Function URL is not configured.');
@@ -155,12 +164,16 @@ export default defineBackground(() => {
 
       try {
         // 1. Get Base64 data and final mime type
-        const { base64Data, mimeType } = await getBase64Data(source, isLargeVideo);
-        console.log(`Sending request to proxy for ${mimeType}, data size: ${(base64Data.length / (1024 * 1024)).toFixed(2)}MB`);
+        const { base64Data, mimeType } = await getBase64Data(source, isLargeVideoHint);
+        
+        // Determine the definitive isVideo based on the actual mimeType
+        const finalIsVideo = isEffectivelyVideo(mimeType);
+
+        console.log(`Sending request to proxy for ${mimeType}, data size: ${(base64Data.length / (1024 * 1024)).toFixed(2)}MB, finalIsVideo: ${finalIsVideo}`);
 
         // Check if this is a large data source
         const isLargeData = base64Data.length > 1000000; // Over 1MB of base64 data
-        if (isVideo && isLargeData) {
+        if (finalIsVideo && isLargeData) { // Use finalIsVideo here
           console.log(`Processing large video data (${(base64Data.length / (1024 * 1024)).toFixed(2)}MB)`);
         }
 
@@ -168,8 +181,8 @@ export default defineBackground(() => {
         const proxyRequestBody = {
             base64Data: base64Data,
             mimeType: mimeType,
-            isVideo: isVideo, 
-            fileName: "file." + (mimeType.split('/')[1] || (isVideo ? "mp4" : "jpg")),
+            isVideo: finalIsVideo, // Use finalIsVideo
+            fileName: "file." + (mimeType.split('/')[1] || (finalIsVideo ? "mp4" : "jpg")), // Use finalIsVideo
             fileSize: base64Data.length // File size based on base64 length
         };
 
@@ -251,10 +264,10 @@ export default defineBackground(() => {
                 console.warn(`Alt text exceeds maximum length (${altText.length} > ${MAX_ALT_TEXT_LENGTH}), condensing instead of truncating...`);
                 
                 // Use Gemini to condense the text instead of truncating
-                altText = await condenseAltText(altText, isVideo);
+                altText = await condenseAltText(altText, finalIsVideo); // Use finalIsVideo
                 
                 // Add a note if the text was condensed
-                if (isVideo) {
+                if (finalIsVideo) { // Use finalIsVideo
                   const condensedNote = "[Note: This video description was automatically condensed to fit character limits.]\n\n";
                   // Only add the note if there's room for it
                   if (altText.length + condensedNote.length <= MAX_ALT_TEXT_LENGTH) {
@@ -274,13 +287,13 @@ export default defineBackground(() => {
           
           // If it's a network error, try an alternative approach for images AND videos
           if ((e.name === 'TypeError' && e.message.includes('Failed to fetch'))) {
-            console.log(`${isVideo ? 'Video' : 'Still image'} network error, trying alternate approach...`);
+            console.log(`${finalIsVideo ? 'Video' : 'Still image'} network error, trying alternate approach...`);
             try {
               // Try a simpler request format
               const simpleRequestBody = {
                 base64Data: base64Data, // Essential
                 mimeType: mimeType,     // Essential
-                isVideo: isVideo,       // Essential
+                isVideo: finalIsVideo,       // Essential // Use finalIsVideo
                 simpleMode: true,       // Flag for the server
                 fileName: proxyRequestBody.fileName, // Keep filename if available
                 // Omit fileSize or other potentially problematic fields for this simplified attempt
@@ -434,28 +447,21 @@ export default defineBackground(() => {
         }
         else if (message && message.action === "generateAltText" && typeof message.mediaUrl === "string" && typeof message.isVideo === "boolean") {
           // Log the request details
-          console.log(`Port request: Generate alt text for ${message.mediaUrl.substring(0, 60)}..., isVideo: ${message.isVideo}`);
+          console.log(`Port request: Generate alt text for ${message.mediaUrl.substring(0, 60)}..., isVideo hint: ${message.isVideo}`);
           
           // For large videos (>1MB), print more information
           const fileSize = message.fileSize || message.mediaUrl.length;
-          const isLargeVideo = message.isVideo && fileSize > 1000000;
+          const isLargeVideoHint = message.isVideo && fileSize > 1000000; 
           
-          if (isLargeVideo) {
-            console.log(`Processing large video (estimated size: ${(fileSize / (1024 * 1024)).toFixed(2)}MB)`);
+          if (isLargeVideoHint) {
+            console.log(`Processing large video (estimated size: ${(fileSize / (1024 * 1024)).toFixed(2)}MB based on hint)`);
           }
           
           try {
-            // Generate alt text using the proxy service
-            const result = await generateAltTextViaProxy(message.mediaUrl, message.isVideo, isLargeVideo);
+            // Generate alt text using the proxy service, passing the hints
+            const result = await generateAltTextViaProxy(message.mediaUrl, message.isVideo, isLargeVideoHint);
             
-            // Log and send the result back via the port
-            console.log("Sending result back via port:", result);
-            
-            if (port) {
-              port.postMessage(result);
-            } else {
-              console.warn("Port disconnected before response could be sent.");
-            }
+            port.postMessage(result);
           } catch (error) {
             console.error("Error generating alt text:", error);
             

@@ -276,6 +276,15 @@
         let currentFile = null;
         let currentMediaElement = null;
         
+        // Helper function to determine if a file should be treated as video for processing
+        function isEffectivelyVideo(file) {
+            if (!file || !file.type) return false;
+            return file.type.startsWith('video/') || 
+                   file.type === 'image/gif' || 
+                   file.type === 'image/webp' || // Assuming all webp could be animated for simplicity here
+                   file.type === 'image/apng';
+        }
+        
         // Event Listeners
         fileInput.addEventListener('change', handleFileSelect);
         
@@ -394,7 +403,7 @@
             // Log file details
             console.log(`Selected file: ${file.name}, type: ${file.type}, size: ${(file.size / (1024 * 1024)).toFixed(2)}MB`);
             
-            // Show captions button for videos
+            // Show captions button for videos (actual videos, not animated images)
             captionBtn.style.display = file.type.startsWith('video/') ? 'block' : 'none';
         }
         
@@ -423,12 +432,12 @@
                     const requestData = {
                         base64Data: base64,
                         mimeType: currentFile.type,
-                        isVideo: currentFile.type.startsWith('video/'),
+                        isVideo: isEffectivelyVideo(currentFile),
                         fileName: currentFile.name,
                         fileSize: currentFile.size
                     };
                     
-                    // Add video metadata if available
+                    // Add video metadata if available and it's an actual video element
                     if (currentFile.type.startsWith('video/') && currentMediaElement && currentMediaElement instanceof HTMLVideoElement) {
                         requestData.videoDuration = currentMediaElement.duration || 0;
                         requestData.videoWidth = currentMediaElement.videoWidth || 0;
