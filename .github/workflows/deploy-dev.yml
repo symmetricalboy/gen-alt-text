@@ -1,60 +1,61 @@
-name: Deploy Dev Site to GitHub Pages
+name: Deploy Dev Site to gh-pages-dev
 
 on:
-  # Runs on pushes targeting the dev branch
   push:
-    branches: ["dev"]
+    branches:
+      - dev
+  workflow_dispatch: # Allows manual triggering from the Actions tab
 
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
-
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
-# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
-concurrency:
-  group: "pages-dev"
-  cancel-in-progress: false
+  contents: write # Required to push to the gh-pages-dev branch
 
 jobs:
-  # Single deploy job since we're just deploying
-  deploy:
-    environment:
-      name: development
-      url: ${{ steps.deployment.outputs.page_url }}
+  build-and-deploy-dev:
+    name: Build and Deploy Dev Site
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout dev branch
         uses: actions/checkout@v4
-      
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
         with:
-          node-version: '20'
-      
-      - name: Install dependencies
-        run: npm install
-      
-      - name: Build project
-        run: npm run build
-      
-      - name: Create CNAME for dev
+          ref: dev # Ensure we are checking out the dev branch
+
+      # --- ADD YOUR BUILD STEPS HERE (IF ANY) ---
+      # If your site is just static HTML/CSS/JS and needs no build, you can skip this.
+      # Example for a Node.js project (e.g., React, Vue, SvelteKit, Eleventy):
+      # - name: Set up Node.js
+      #   uses: actions/setup-node@v4
+      #   with:
+      #     node-version: '20' # Specify your Node.js version
+      #     cache: 'npm' # Or 'yarn' or 'pnpm'
+      #
+      # - name: Install dependencies
+      #   run: npm ci # Or yarn install --frozen-lockfile or pnpm install --frozen-lockfile
+      #
+      # - name: Build project
+      #   run: npm run build # Or your specific build script
+      #   # Ensure your build output goes to a consistent directory, e.g., 'dist', 'build', 'public'
+      #
+      # --- END OF BUILD STEPS ---
+
+      - name: Create CNAME file for dev site
+        # If you have a build step, create CNAME in your build output directory.
+        # Example: If build output is in 'dist/':
+        # run: echo "alttextdev.symm.app" > dist/CNAME
+        #
+        # If no build step (serving files directly from dev branch root):
         run: echo "alttextdev.symm.app" > CNAME
-        # This creates the CNAME file at the root for the dev deployment
-      
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-      
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+
+      - name: Deploy to gh-pages-dev branch
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          # Upload entire repository
-          path: '.'
-      
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4 
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages-dev # The branch to deploy the dev site to
+          # Adjust publish_dir if you have a build step:
+          # publish_dir: ./dist # Example for a build output directory named 'dist'
+          # If no build step, and CNAME is created at root of checkout:
+          publish_dir: .
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          commit_message: 'Deploy dev site from ${{ github.sha }} to gh-pages-dev'
+          # force_orphan: true # Optional: Creates a clean history for the publish_branch. Use with caution.
+          # cname: alttextdev.symm.app # Can also be set here, but CNAME file in publish_dir is often preferred.
