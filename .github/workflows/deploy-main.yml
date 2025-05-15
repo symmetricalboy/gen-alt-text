@@ -21,7 +21,7 @@ jobs:
   build-and-deploy:
     environment:
       name: github-pages
-      url: alttext.symm.app
+      url: https://alttext.symm.app/
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
