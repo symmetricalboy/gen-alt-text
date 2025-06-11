@@ -371,12 +371,13 @@ runtimeAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     // Handle new compression operations
     else if (message.type === 'compressVideo') {
-        const { operationId, fileData, fileName, mimeType, compressionSettings } = message.payload;
-        console.log(`[Offscreen] Processing compressVideo message for opId: ${operationId}. File: ${fileName}`);
+        const { operationId, fileData, fileName, mimeType, compressionSettings, fileSize } = message.payload;
+        const actualFileSize = fileSize || fileData.byteLength;
+        console.log(`[Offscreen] Processing compressVideo message for opId: ${operationId}. File: ${fileName} (${(actualFileSize / (1024 * 1024)).toFixed(1)}MB)`);
 
         (async () => {
             try {
-                console.log(`[Offscreen] Starting compression for ${fileName} (${(fileData.byteLength / (1024 * 1024)).toFixed(1)}MB)`);
+                console.log(`[Offscreen] Starting compression for ${fileName} (${(actualFileSize / (1024 * 1024)).toFixed(1)}MB)`);
                 
                 // Load video processing module
                 const videoModule = await loadVideoProcessingModule();

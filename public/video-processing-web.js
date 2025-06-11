@@ -170,7 +170,6 @@
                 if (progressCallback) progressCallback(message);
             };
 
-            try {
             log(`Starting compression for ${videoFile.name} (${(videoFile.size / (1024 * 1024)).toFixed(1)}MB)`);
             log(`Settings: codec=${codec}, quality=${quality}, maxSizeMB=${maxSizeMB}`);
             
@@ -183,146 +182,217 @@
             
             log('FFmpeg initialized successfully');
         
-        const inputFileName = videoFile.name || 'input.mp4';
-        const originalSize = videoFile.size;
-        
-        log('Loading video file into FFmpeg...');
-        
-        // Handle different FFmpeg versions
-        const config = getFFmpegConfig();
-        if (config.version === 'v0.12.x') {
-            // FFmpeg v0.12.x - deprecated, should not be used
-            throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
-        } else {
-            // FFmpeg v0.11.x - use the correct fetchFile function
-            // In offscreen context, fetchFile should be available from various sources
-            let fetchFileFunc = null;
+            // Use proper input filename with correct extension to avoid format misdetection
+            let inputFileName = videoFile.name || 'input.mp4';
             
-            // Try different sources for fetchFile
-            if (typeof global !== 'undefined') {
-                fetchFileFunc = global.FFmpeg?.fetchFile || global.fetchFile;
-            }
-            if (!fetchFileFunc && typeof self !== 'undefined') {
-                fetchFileFunc = self.FFmpeg?.fetchFile || self.fetchFile;
-            }
-            if (!fetchFileFunc && typeof window !== 'undefined') {
-                fetchFileFunc = window.FFmpeg?.fetchFile || window.fetchFile;
-            }
-            if (!fetchFileFunc && typeof fetchFile !== 'undefined') {
-                fetchFileFunc = fetchFile;
-            }
-            
-            // For v0.11.x, we can also create a simple fetchFile function if needed
-            if (!fetchFileFunc) {
-                log('Creating fetchFile function for file reading...');
-                fetchFileFunc = async (file) => {
-                    if (file instanceof File || file instanceof Blob) {
-                        return new Uint8Array(await file.arrayBuffer());
+            // Ensure proper file extension based on MIME type to prevent FFmpeg format misdetection
+            if (videoFile.type) {
+                if (videoFile.type.includes('webm')) {
+                    inputFileName = inputFileName.replace(/\.[^.]+$/, '.webm');
+                    if (!inputFileName.endsWith('.webm')) {
+                        inputFileName += '.webm';
                     }
-                    throw new Error('Invalid file type for fetchFile');
-                };
+                } else if (videoFile.type.includes('mp4') || videoFile.type.includes('video/mp4')) {
+                    inputFileName = inputFileName.replace(/\.[^.]+$/, '.mp4');
+                    if (!inputFileName.endsWith('.mp4')) {
+                        inputFileName += '.mp4';
+                    }
+                } else if (videoFile.type.includes('avi')) {
+                    inputFileName = inputFileName.replace(/\.[^.]+$/, '.avi');
+                    if (!inputFileName.endsWith('.avi')) {
+                        inputFileName += '.avi';
+                    }
+                } else if (videoFile.type.includes('mov')) {
+                    inputFileName = inputFileName.replace(/\.[^.]+$/, '.mov');
+                    if (!inputFileName.endsWith('.mov')) {
+                        inputFileName += '.mov';
+                    }
+                } else {
+                    // Default to .mp4 for unknown video types
+                    inputFileName = inputFileName.replace(/\.[^.]+$/, '.mp4');
+                    if (!inputFileName.includes('.')) {
+                        inputFileName += '.mp4';
+                    }
+                }
             }
             
-            await ffmpegInstance.FS('writeFile', inputFileName, await fetchFileFunc(videoFile));
-        }
-
-        try {
-            // First pass - initial compression
-            log('Starting initial compression...');
-            const { ext, params: initialParams } = getCodecParams(codec, quality);
-            const outputFileName = `compressed.${ext}`;
+            log(`Using input filename: ${inputFileName} for MIME type: ${videoFile.type}`);
             
-            log(`Running FFmpeg with codec: ${codec}, quality: ${quality}`);
+            const originalSize = videoFile.size;
             
+            log('Loading video file into FFmpeg...');
+            
+            // Handle different FFmpeg versions
+            const config = getFFmpegConfig();
             if (config.version === 'v0.12.x') {
+                // FFmpeg v0.12.x - deprecated, should not be used
                 throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
             } else {
-                await ffmpegInstance.run('-i', inputFileName, ...initialParams, outputFileName);
-            }
-            
-            let data;
-            if (config.version === 'v0.12.x') {
-                throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
-            } else {
-                data = ffmpegInstance.FS('readFile', outputFileName);
-            }
-            
-            let compressedSize = data.buffer ? data.buffer.byteLength : data.byteLength;
-            log(`Initial compression complete. Size: ${(compressedSize / 1024 / 1024).toFixed(2)} MB`);
-            
-            // Second pass if file is still too large
-            if (compressedSize > maxSizeMB * 1024 * 1024) {
-                log(`File larger than ${maxSizeMB}MB. Applying stronger compression...`);
+                // FFmpeg v0.11.x - use the correct fetchFile function
+                // In offscreen context, fetchFile should be available from various sources
+                let fetchFileFunc = null;
                 
-                // Clean up first pass file
-                if (config.version === 'v0.12.x') {
-                    throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
-                } else {
-                    ffmpegInstance.FS('unlink', outputFileName);
+                // Try different sources for fetchFile
+                if (typeof global !== 'undefined') {
+                    fetchFileFunc = global.FFmpeg?.fetchFile || global.fetchFile;
+                }
+                if (!fetchFileFunc && typeof self !== 'undefined') {
+                    fetchFileFunc = self.FFmpeg?.fetchFile || self.fetchFile;
+                }
+                if (!fetchFileFunc && typeof window !== 'undefined') {
+                    fetchFileFunc = window.FFmpeg?.fetchFile || window.fetchFile;
+                }
+                if (!fetchFileFunc && typeof fetchFile !== 'undefined') {
+                    fetchFileFunc = fetchFile;
                 }
                 
-                const { ext: strongerExt, params: strongerParams } = getCodecParams(codec, quality, true);
-                const strongerOutputFileName = `compressed_stronger.${strongerExt}`;
-                
-                log('Running stronger compression...');
-                
-                if (config.version === 'v0.12.x') {
-                    throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
-                } else {
-                    await ffmpegInstance.run('-i', inputFileName, ...strongerParams, strongerOutputFileName);
-                    data = ffmpegInstance.FS('readFile', strongerOutputFileName);
-                    ffmpegInstance.FS('unlink', strongerOutputFileName);
+                // For v0.11.x, we can also create a simple fetchFile function if needed
+                if (!fetchFileFunc) {
+                    log('Creating fetchFile function for file reading...');
+                    fetchFileFunc = async (file) => {
+                        if (file instanceof File || file instanceof Blob) {
+                            return new Uint8Array(await file.arrayBuffer());
+                        }
+                        throw new Error('Invalid file type for fetchFile');
+                    };
                 }
                 
-                compressedSize = data.buffer ? data.buffer.byteLength : data.byteLength;
-                log(`Stronger compression complete. Final size: ${(compressedSize / 1024 / 1024).toFixed(2)} MB`);
-            } else {
-                // Clean up initial compression file
-                if (config.version === 'v0.12.x') {
-                    throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
-                } else {
-                    ffmpegInstance.FS('unlink', outputFileName);
+                log(`Writing ${(videoFile.size / (1024 * 1024)).toFixed(1)}MB file to FFmpeg filesystem as ${inputFileName}...`);
+                await ffmpegInstance.FS('writeFile', inputFileName, await fetchFileFunc(videoFile));
+                
+                // Verify file was written correctly
+                try {
+                    const fileStats = ffmpegInstance.FS('stat', inputFileName);
+                    log(`File written successfully: ${inputFileName} (${fileStats.size} bytes)`);
+                    if (fileStats.size === 0) {
+                        throw new Error('Written file is empty - fetchFile may have failed');
+                    }
+                } catch (statError) {
+                    log(`Warning: Could not verify file write: ${statError.message}`);
                 }
             }
 
-            // Create result blob with appropriate MIME type
-            const mimeType = ext === 'webm' ? 'video/webm' : 'video/mp4';
-            const blobData = data.buffer || data;
-            const blob = new Blob([blobData], { type: mimeType });
-            
-            const compressionRatio = ((originalSize - compressedSize) / originalSize) * 100;
-            
-            log(`Compression complete! Reduced from ${(originalSize / 1024 / 1024).toFixed(2)}MB to ${(compressedSize / 1024 / 1024).toFixed(2)}MB (${compressionRatio.toFixed(1)}% reduction)`);
-
-            return {
-                blob,
-                originalSize,
-                compressedSize,
-                compressionRatio,
-                codec,
-                quality
-            };
-
-        } catch (error) {
-            log(`Compression failed: ${error.message || error}`);
-            console.error('[VideoProcessing] Full error details:', error);
-            throw new Error(`Video compression failed: ${error.message || error}`);
-        } finally {
-            // Clean up input file
             try {
+                // First pass - initial compression
+                log('Starting initial compression...');
+                const { ext, params: initialParams } = getCodecParams(codec, quality);
+                const outputFileName = `compressed.${ext}`;
+                
+                log(`Running FFmpeg with codec: ${codec}, quality: ${quality}`);
+                
+                // Add explicit format specification to prevent misdetection
+                const formatFlag = inputFileName.endsWith('.webm') ? ['-f', 'webm'] : 
+                                  inputFileName.endsWith('.avi') ? ['-f', 'avi'] :
+                                  inputFileName.endsWith('.mov') ? ['-f', 'mov'] :
+                                  ['-f', 'mp4'];
+                
+                log(`FFmpeg command: ffmpeg ${formatFlag.join(' ')} -i ${inputFileName} ${initialParams.join(' ')} ${outputFileName}`);
+                
                 if (config.version === 'v0.12.x') {
                     throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
                 } else {
-                    ffmpegInstance.FS('unlink', inputFileName);
+                    await ffmpegInstance.run(...formatFlag, '-i', inputFileName, ...initialParams, outputFileName);
                 }
-            } catch (e) {
-                log(`Cleanup warning: ${e.message || e}`);
-                // Ignore if file doesn't exist
+                
+                let data;
+                if (config.version === 'v0.12.x') {
+                    throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
+                } else {
+                    // Check if output file exists before trying to read it
+                    try {
+                        const outputStats = ffmpegInstance.FS('stat', outputFileName);
+                        log(`Output file exists: ${outputFileName} (${outputStats.size} bytes)`);
+                        if (outputStats.size === 0) {
+                            throw new Error('Output file is empty - compression may have failed');
+                        }
+                        data = ffmpegInstance.FS('readFile', outputFileName);
+                    } catch (readError) {
+                        throw new Error(`Failed to read output file ${outputFileName}: ${readError.message}`);
+                    }
+                }
+                
+                let compressedSize = data.buffer ? data.buffer.byteLength : data.byteLength;
+                log(`Initial compression complete. Size: ${(compressedSize / 1024 / 1024).toFixed(2)} MB`);
+                
+                // Second pass if file is still too large
+                if (compressedSize > maxSizeMB * 1024 * 1024) {
+                    log(`File larger than ${maxSizeMB}MB. Applying stronger compression...`);
+                    
+                    // Clean up first pass file
+                    if (config.version === 'v0.12.x') {
+                        throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
+                    } else {
+                        ffmpegInstance.FS('unlink', outputFileName);
+                    }
+                    
+                    const { ext: strongerExt, params: strongerParams } = getCodecParams(codec, quality, true);
+                    const strongerOutputFileName = `compressed_stronger.${strongerExt}`;
+                    
+                    log('Running stronger compression...');
+                    log(`FFmpeg stronger command: ffmpeg ${formatFlag.join(' ')} -i ${inputFileName} ${strongerParams.join(' ')} ${strongerOutputFileName}`);
+                    
+                    if (config.version === 'v0.12.x') {
+                        throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
+                    } else {
+                        await ffmpegInstance.run(...formatFlag, '-i', inputFileName, ...strongerParams, strongerOutputFileName);
+                        data = ffmpegInstance.FS('readFile', strongerOutputFileName);
+                        ffmpegInstance.FS('unlink', strongerOutputFileName);
+                    }
+                    
+                    compressedSize = data.buffer ? data.buffer.byteLength : data.byteLength;
+                    log(`Stronger compression complete. Final size: ${(compressedSize / 1024 / 1024).toFixed(2)} MB`);
+                } else {
+                    // Clean up initial compression file
+                    if (config.version === 'v0.12.x') {
+                        throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
+                    } else {
+                        ffmpegInstance.FS('unlink', outputFileName);
+                    }
+                }
+
+                // Create result blob with appropriate MIME type
+                const mimeType = ext === 'webm' ? 'video/webm' : 'video/mp4';
+                const blobData = data.buffer || data;
+                const blob = new Blob([blobData], { type: mimeType });
+                
+                const compressionRatio = ((originalSize - compressedSize) / originalSize) * 100;
+                
+                log(`Compression complete! Reduced from ${(originalSize / 1024 / 1024).toFixed(2)}MB to ${(compressedSize / 1024 / 1024).toFixed(2)}MB (${compressionRatio.toFixed(1)}% reduction)`);
+
+                return {
+                    blob,
+                    originalSize,
+                    compressedSize,
+                    compressionRatio,
+                    codec,
+                    quality
+                };
+
+            } catch (error) {
+                log(`Compression failed: ${error.message || error}`);
+                console.error('[VideoProcessing] Full error details:', error);
+                throw new Error(`Video compression failed: ${error.message || error}`);
+            } finally {
+                // Clean up input file
+                try {
+                    if (config.version === 'v0.12.x') {
+                        throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
+                    } else {
+                        ffmpegInstance.FS('unlink', inputFileName);
+                    }
+                } catch (e) {
+                    log(`Cleanup warning: ${e.message || e}`);
+                    // Ignore if file doesn't exist
+                }
             }
-        }
-        
+            
         } catch (outerError) {
-            log(`Outer compression error: ${outerError.message || outerError}`);
+            // Make sure log function is available in catch block too
+            const logError = (message) => {
+                console.log(`[VideoProcessing]: ${message}`);
+                if (progressCallback) progressCallback(message);
+            };
+            logError(`Outer compression error: ${outerError.message || outerError}`);
             console.error('[VideoProcessing] Outer error details:', outerError);
             throw outerError;
         } finally {

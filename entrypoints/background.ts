@@ -599,6 +599,22 @@ async function processMediaWithUrl(
                             console.log(`[processMediaWithUrl] Starting offscreen compression for ${fileName}...`);
                             const fileArrayBuffer = await file.arrayBuffer();
                             
+                            console.log(`[processMediaWithUrl] File data prepared: ${fileName} (${(fileArrayBuffer.byteLength / (1024 * 1024)).toFixed(1)}MB)`);
+                            
+                            // Send progress update with correct file size
+                            port.postMessage({ 
+                                type: 'progress', 
+                                message: `Starting compression for ${fileName} (${(fileArrayBuffer.byteLength / (1024 * 1024)).toFixed(1)}MB)`, 
+                                originalSrcUrl: mediaSrcUrl 
+                            });
+                            
+                            // Update compression settings to show correct file size in logs
+                            port.postMessage({ 
+                                type: 'progress', 
+                                message: `Settings: codec=${compressionSettings.codec}, quality=${compressionSettings.quality}, maxSizeMB=${compressionSettings.maxSizeMB}`, 
+                                originalSrcUrl: mediaSrcUrl 
+                            });
+                            
                             const response = await browser.runtime.sendMessage({
                                 target: 'offscreen-ffmpeg',
                                 type: 'compressVideo',
@@ -607,7 +623,8 @@ async function processMediaWithUrl(
                                     fileData: fileArrayBuffer,
                                     fileName: fileName,
                                     mimeType: mediaType,
-                                    compressionSettings: compressionSettings
+                                    compressionSettings: compressionSettings,
+                                    fileSize: fileArrayBuffer.byteLength // Add explicit file size
                                 }
                             });
                             
@@ -883,6 +900,18 @@ export default {
                         type: 'progress',
                         message: message.message,
                         originalSrcUrl: message.originalSrcUrl || 'Unknown'
+                    });
+                }
+            }
+            
+            // Forward FFmpeg initialization messages
+            if (message.type === 'ffmpegProgress') {
+                console.log('[Background] Received FFmpeg progress:', message.message);
+                if (contentScriptPort) {
+                    contentScriptPort.postMessage({
+                        type: 'progress',
+                        message: message.message,
+                        originalSrcUrl: 'Unknown'
                     });
                 }
             }
