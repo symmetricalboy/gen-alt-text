@@ -78,8 +78,10 @@ function loadFFmpegWrapper() {
     () => { // ffmpeg.min.js (wrapper) loaded
       ffmpegWrapperScriptLoaded = true;
       logStatus('ffmpeg.min.js (wrapper) loaded successfully. Checking for createFFmpeg...');
-      // For FFmpeg v0.11.x, we expect createFFmpeg function
-      if (typeof self.createFFmpeg === 'function') {
+      // For FFmpeg v0.11.x, we expect createFFmpeg function at self.FFmpeg.createFFmpeg
+      if (typeof self.FFmpeg === 'object' && self.FFmpeg !== null && typeof self.FFmpeg.createFFmpeg === 'function') {
+          logStatus('ffmpeg.min.js (v0.11.x wrapper) processed: self.FFmpeg.createFFmpeg is available.');
+      } else if (typeof self.createFFmpeg === 'function') {
           logStatus('ffmpeg.min.js (v0.11.x wrapper) processed: self.createFFmpeg is available.');
       } else if (typeof createFFmpeg === 'function') {
           logStatus('ffmpeg.min.js (v0.11.x wrapper) processed: global createFFmpeg is available.');
@@ -111,8 +113,9 @@ function loadHandlerScript() {
       logStatus('Handler script loaded.');
       
       const coreReady = typeof self.createFFmpegCore === 'function';
-      // For FFmpeg v0.11.x, we expect createFFmpeg function
-      const wrapperReady = typeof self.createFFmpeg === 'function' || typeof createFFmpeg === 'function';
+      // For FFmpeg v0.11.x, we expect createFFmpeg function at self.FFmpeg.createFFmpeg
+      const wrapperReady = (typeof self.FFmpeg === 'object' && self.FFmpeg !== null && typeof self.FFmpeg.createFFmpeg === 'function') ||
+                          typeof self.createFFmpeg === 'function' || typeof createFFmpeg === 'function';
       let statusMsg = `Handler loaded. Core ready: ${coreReady}. Wrapper ready: ${wrapperReady}.`;
       if (!coreReady) statusMsg += ' (Core script issue!)';
       if (!wrapperReady) statusMsg += ' (Wrapper script issue!)';

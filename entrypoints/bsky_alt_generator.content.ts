@@ -201,6 +201,19 @@ export default defineContentScript({
         const rect = el.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0 && (el as HTMLElement).offsetParent !== null;
       };
+      
+      // Check if we're in a Video settings dialog
+      const isVideoSettingsDialog = container.getAttribute('aria-label') === 'Video settings' || 
+                                   container.closest('[aria-label="Video settings"]');
+      
+      // For Video settings dialogs, we need to search more broadly since the video might not be in the same container
+      let searchScope = container;
+      if (isVideoSettingsDialog) {
+        // Search in the entire document or at least a broader scope
+        searchScope = document.body;
+        console.log('[findMediaElement - V2] Video settings dialog detected, expanding search scope to document body');
+      }
+      
       const selectors: string[] = [
         '[data-testid="videoPreview"] video[src]', '[data-testid="videos"] video[src]',
         '[data-testid="videoPreview"] video source[src]', '[data-testid="videos"] video source[src]',
@@ -209,9 +222,20 @@ export default defineContentScript({
         '[data-testid="images"] img[src]:not([alt="AI"])',
         'img[src]:not([alt*="avatar" i]):not([src*="avatar"]):not([alt="AI"])'
       ];
+      
+      // For Video settings dialogs, also look for videos without src (might be in upload process)
+      if (isVideoSettingsDialog) {
+        selectors.unshift(
+          'video:not([src])', 
+          '[data-testid="videoPreview"] video',
+          '[data-testid="videos"] video',
+          'video' // Any video element
+        );
+      }
+      
       const visibleElements: (HTMLImageElement | HTMLVideoElement)[] = [];
       for (const selector of selectors) {
-        const elements = container.querySelectorAll<HTMLImageElement | HTMLVideoElement | HTMLSourceElement>(selector);
+        const elements = searchScope.querySelectorAll<HTMLImageElement | HTMLVideoElement | HTMLSourceElement>(selector);
         elements.forEach(element => {
           if (element instanceof HTMLSourceElement) {
             const videoParent = element.closest('video');
@@ -262,18 +286,54 @@ export default defineContentScript({
       } else if (mediaElement instanceof HTMLVideoElement) {
          const sourceEl = mediaElement.querySelector('source');
          src = sourceEl?.src || mediaElement.src;
-         mediaType = mediaElement.dataset.mimeType || sourceEl?.type || 'video/mp4'; // Removed mediaElement.type
+         mediaType = mediaElement.dataset.mimeType || sourceEl?.type || 'video/mp4'; // Default
+         
+         // If no explicit MIME type and we have a URL, try to infer from file extension
+         if ((!mediaElement.dataset.mimeType && !sourceEl?.type) && src) {
+           try {
+             const url = new URL(src);
+             const pathname = url.pathname.toLowerCase();
+             if (pathname.endsWith('.webm')) {
+               mediaType = 'video/webm';
+             } else if (pathname.endsWith('.mp4')) {
+               mediaType = 'video/mp4';
+             } else if (pathname.endsWith('.avi')) {
+               mediaType = 'video/avi';
+             } else if (pathname.endsWith('.mov')) {
+               mediaType = 'video/quicktime';
+             } else if (pathname.endsWith('.ogv')) {
+               mediaType = 'video/ogg';
+             }
+           } catch (e) {
+             // Fallback to default if URL parsing fails
+           }
+         }
+         
+         // For video elements without src (during upload), create a placeholder that indicates this is for video upload
+         if (!src && mediaElement instanceof HTMLVideoElement) {
+           // Check if we're in a video settings dialog
+           const isInVideoDialog = mediaElement.closest('[aria-label="Video settings"]');
+           if (isInVideoDialog) {
+             src = 'pending-upload://video-upload';
+             mediaType = 'video/mp4'; // Default for pending uploads
+             console.log('[getMediaSourceInfo] Video element without src detected in Video settings dialog, creating placeholder info');
+           }
+         }
       }
       if (!src) { createToast('Could not find media source.', 'error'); return null; }
       console.log('[getMediaSourceInfo] Media source URL:', src, 'Type:', mediaType);
 
       let fileName = 'pasted_media';
       try {
-        const urlObj = new URL(src);
-        if (src.startsWith('blob:') || src.startsWith('data:')) {
-            fileName = mediaElement.title || (mediaElement instanceof HTMLImageElement ? mediaElement.alt : null) || `media_${Date.now()}`;
+        if (src === 'pending-upload://video-upload') {
+          fileName = `pending_video_upload_${Date.now()}`;
         } else {
-            fileName = urlObj.pathname.substring(urlObj.pathname.lastIndexOf('/') + 1) || fileName;
+          const urlObj = new URL(src);
+          if (src.startsWith('blob:') || src.startsWith('data:')) {
+              fileName = mediaElement.title || (mediaElement instanceof HTMLImageElement ? mediaElement.alt : null) || `media_${Date.now()}`;
+          } else {
+              fileName = urlObj.pathname.substring(urlObj.pathname.lastIndexOf('/') + 1) || fileName;
+          }
         }
       } catch (e) {
         fileName = mediaElement.title || (mediaElement instanceof HTMLImageElement ? mediaElement.alt : null) || `media_${Date.now()}`;
@@ -344,11 +404,18 @@ export default defineContentScript({
         return;
       }
 
+      // Check if we're in a Video settings dialog specifically
+      const isVideoSettingsDialog = container.getAttribute('aria-label') === 'Video settings' || 
+                                   container.closest('[aria-label="Video settings"]');
+
       const mediaElement = findMediaElement(container);
-      if (!mediaElement) {
+      if (!mediaElement && !isVideoSettingsDialog) {
         console.log('[addGenerateButton] No media element found in container.');
         return;
       }
+
+      // For Video settings dialog, we proceed even without a media element
+      // since the video is being uploaded and not yet visible in the DOM
 
       const button = document.createElement('button');
       button.type = 'button';
@@ -402,12 +469,29 @@ export default defineContentScript({
         try {
           setActiveButton(button);
 
-          const mediaInfo = await getMediaSourceInfo(mediaElement);
+          // Handle Video settings dialog case where there's no media element
+          if (!mediaElement && isVideoSettingsDialog) {
+            createToast('Please wait for the video upload to complete before generating alt text.', 'warning', 6000);
+            resetActiveButton();
+            return;
+          }
+
+          const mediaInfo = await getMediaSourceInfo(mediaElement!);
           if (!mediaInfo) {
             throw new Error('Could not get media source information');
           }
 
           const { srcUrl, mediaType, fileName } = mediaInfo;
+          
+          // Handle pending upload case
+          if (srcUrl === 'pending-upload://video-upload') {
+            createToast('Please wait for the video upload to complete before generating alt text.', 'warning', 6000);
+            resetActiveButton();
+            return;
+          }
+          
+          console.log('[ContentScript] Processing media with URL:', srcUrl.substring(0, 50) + '...');
+          
           console.log('[ContentScript] Sending media to background for processing:', { srcUrl: srcUrl.substring(0, 100) + '...', mediaType, fileName });
 
           const videoMetadata = mediaElement instanceof HTMLVideoElement ? getVideoMetadata(mediaElement) : null;
@@ -543,6 +627,12 @@ export default defineContentScript({
         }
         const sourceInfo = await getMediaSourceInfo(videoElement);
         if (!sourceInfo) { createToast('Could not get video file info.', 'error'); return; }
+        
+        // Handle pending upload case
+        if (sourceInfo.srcUrl === 'pending-upload://video-upload') {
+            createToast('Please wait for the video upload to complete before generating captions.', 'warning', 6000);
+            return;
+        }
 
         const button = document.getElementById(CAPTION_BUTTON_ID) as HTMLButtonElement | null;
         const originalButtonTextContentForThisButton = button ? button.innerHTML : "Generate Captions"; // Store original text before setting active
@@ -701,14 +791,14 @@ export default defineContentScript({
         if (message.type === 'progress') {
           createToast(message.message, 'info', 5000);
         } else if (message.type === 'ffmpegStatus') {
-          createToast(`FFmpeg: ${message.status}`, message.error ? 'error' : 'info', message.error ? 8000 : 4000);
+          createToast(`Video compression: ${message.status}`, message.error ? 'error' : 'info', message.error ? 8000 : 4000);
           
           if (message.firstLoadMessage && message.loading) {
             createToast(message.firstLoadMessage, 'persistent', 0);
           }
           
           if (message.error && message.status && message.status.includes('timed out')) {
-            createToast('Note: Simple images and GIFs can still be processed without FFmpeg!', 'info', 6000);
+            createToast('Note: Simple images and smaller videos can still be processed!', 'info', 6000);
           }
         } else if (message.type === 'warning') {
           createToast(message.message, 'warning', 7000);

@@ -8,6 +8,24 @@ let FFMPEG_LOADED = false; // Tracks if newInstance.load() was successful
 let loadInProgress = false;
 let loadPromise = null;
 
+// Import our new video processing module for compression operations
+let videoProcessingModule = null;
+
+// Load video processing module dynamically
+async function loadVideoProcessingModule() {
+    if (videoProcessingModule) return videoProcessingModule;
+    
+    try {
+        // Use dynamic import to load our TypeScript module
+        videoProcessingModule = await import('../lib/video-processing.js');
+        console.log('[Offscreen] Video processing module loaded successfully');
+        return videoProcessingModule;
+    } catch (error) {
+        console.error('[Offscreen] Failed to load video processing module:', error);
+        return null;
+    }
+}
+
 // Check if we're running in a service worker context (not strictly necessary for offscreen, but good for context)
 const isOffscreenDocument = typeof window !== 'undefined' && typeof chrome !== 'undefined' && chrome.runtime && !!chrome.runtime.getURL;
 
@@ -118,6 +136,10 @@ async function getFFmpegInstance() {
             
             const newInstance = createFFmpegFunc({
                 log: true, // Enable logging
+                // Disable threading to avoid blob worker issues in Chrome MV3
+                // This makes FFmpeg run in single-threaded mode which is compatible with CSP restrictions
+                mainName: 'main',
+                
                 // Use locateFile function to resolve paths dynamically
                 locateFile: (path, scriptDirectory) => {
                     console.log('[Offscreen] locateFile called:', { path, scriptDirectory });
@@ -134,10 +156,9 @@ async function getFFmpegInstance() {
                         return coreURL;
                     }
                     if (path.includes('ffmpeg-core.worker.js')) {
-                        // Try to find worker file if it exists
-                        const workerURL = runtimeAPI.runtime.getURL('assets/ffmpeg/ffmpeg-core.worker.js');
-                        console.log('[Offscreen] Resolving worker file to:', workerURL);
-                        return workerURL;
+                        // Return null for worker files to disable threading
+                        console.log('[Offscreen] Disabling worker file to avoid CSP blob: issues');
+                        return null;
                     }
                     
                     // Fallback to default resolution
@@ -322,6 +343,61 @@ runtimeAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 // Do not use sendResponse
             });
     }
+    // Handle new compression operations
+    else if (message.type === 'compressVideo') {
+        const { operationId, fileData, fileName, mimeType, compressionSettings } = message.payload;
+        console.log(`[Offscreen] Processing compressVideo message for opId: ${operationId}. File: ${fileName}`);
+
+        (async () => {
+            try {
+                // Load video processing module
+                const videoModule = await loadVideoProcessingModule();
+                if (!videoModule) {
+                    throw new Error('Video processing module not available');
+                }
+
+                // Create File object from the data
+                const file = new File([fileData], fileName, { type: mimeType });
+                
+                console.log(`[Offscreen] Compressing ${fileName} (${(file.size / (1024 * 1024)).toFixed(1)}MB)`);
+                
+                // Perform compression using our module
+                const result = await videoModule.compressVideo(file, compressionSettings, (progress) => {
+                    // Send progress updates back to background
+                    runtimeAPI.runtime.sendMessage({
+                        type: 'compressionProgress',
+                        operationId,
+                        message: progress
+                    }).catch(e => console.warn('[Offscreen] Error sending progress:', e.message));
+                });
+                
+                if (result) {
+                    // Convert blob to array buffer for sending back
+                    const arrayBuffer = await result.blob.arrayBuffer();
+                    
+                    sendResponse({
+                        success: true,
+                        data: arrayBuffer,
+                        originalSize: result.originalSize,
+                        compressedSize: result.compressedSize,
+                        compressionRatio: result.compressionRatio,
+                        codec: result.codec,
+                        quality: result.quality
+                    });
+                } else {
+                    throw new Error('Compression failed - no result returned');
+                }
+            } catch (error) {
+                console.error('[Offscreen] Compression error:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message
+                });
+            }
+        })();
+        
+        return true; // Indicate async response
+    }
     // Standardize message type to 'runFFmpeg'
     else if (message.type === 'runFFmpeg') { 
         const { operationId, command, srcUrl, fileData, mediaType, fileName: inputFileNameFromPayload, file: inputFileObject, outputFileName } = message.payload;
@@ -466,7 +542,36 @@ console.log('[Offscreen] Event listeners set up.');
     try {
         await getFFmpegInstance();
         console.log('[Offscreen] FFmpeg auto-load successful.');
+        
+        // Notify background script that FFmpeg is ready
+        try {
+            runtimeAPI.runtime.sendMessage({ 
+                type: 'ffmpegStatusOffscreen', 
+                payload: { 
+                    status: 'FFmpeg loaded and ready in offscreen document (auto-load).', 
+                    progress: 'complete', 
+                    timestamp: new Date().toISOString() 
+                }
+            }).catch(e => console.warn('[Offscreen] Error sending auto-load complete message:', e.message));
+        } catch (e) {
+            console.warn('[Offscreen] Error sending auto-load complete message:', e);
+        }
     } catch (error) {
         console.error('[Offscreen] FFmpeg auto-load failed:', error);
+        
+        // Notify background script of auto-load failure
+        try {
+            runtimeAPI.runtime.sendMessage({ 
+                type: 'ffmpegStatusOffscreen', 
+                payload: { 
+                    status: 'FFmpeg auto-load failed in offscreen document.', 
+                    error: error.message || 'Unknown FFmpeg auto-load error',
+                    progress: 'error',
+                    timestamp: new Date().toISOString()
+                } 
+            }).catch(e => console.warn('[Offscreen] Error sending auto-load error message:', e.message));
+        } catch (e) {
+            console.warn('[Offscreen] Error sending auto-load error message:', e);
+        }
     }
 })(); 

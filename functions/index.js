@@ -7,7 +7,7 @@ const fetch = require('node-fetch'); // Use node-fetch or native fetch in newer 
 // Good Practice: Use Build-time Environment Variables (set during deployment)
 // Simpler (but less secure than Secret Manager): Use Runtime Environment Variables
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // Will be set during deployment
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent';
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
 
 // --- Instructions for caption generation ---
 const captionSystemInstructions = `You are an expert captioning service. Your task is to provide accurate captions for a video by transcribing its audio content. The captions should be properly formatted as WebVTT subtitles with timestamps.
@@ -420,6 +420,11 @@ In a real implementation, we would analyze the actual video.`;
         const isVideoFrame = isVideo && mimeType.startsWith('image/') && !isAnimatedImage;
 
         console.log(`Processing allowed request from origin: ${requestOrigin}, mimeType: ${mimeType} (original: ${originalMimeTypeForAltText}), data length: ${base64Data.length}, isVideo: ${isVideo}, isAnimatedImage: ${isAnimatedImage}, isVideoFrame: ${isVideoFrame}`);
+        
+        // Additional debugging for WebM files
+        if (mimeType === 'video/webm' || originalMimeTypeForAltText.includes('webm')) {
+            console.log(`WEBM DEBUG: Processing WebM file with original type: ${originalMimeTypeForAltText}, cleaned type: ${mimeType}`);
+        }
 
         // Add special handling for video frames
         let effectiveSystemInstructions = systemInstructions;
@@ -437,6 +442,10 @@ In a real implementation, we would analyze the actual video.`;
             // The system instructions for animated images should still guide Gemini correctly.
             mimeTypeForGemini = 'video/mp4'; 
             console.log(`ALERT: For Gemini API call, overriding mimeType from "${mimeType}" to "${mimeTypeForGemini}" because isVideo=true and isAnimatedImage=true.`);
+        } else if (mimeType === 'video/webm') {
+            // WebM files should be sent as MP4 for better Gemini compatibility
+            mimeTypeForGemini = 'video/mp4';
+            console.log(`ALERT: For Gemini API call, overriding mimeType from "${mimeType}" to "${mimeTypeForGemini}" for better WebM compatibility.`);
         }
 
         const geminiRequestBody = {
@@ -454,7 +463,7 @@ In a real implementation, we would analyze the actual video.`;
           }
         };
 
-        console.log('Calling Gemini API...');
+        console.log(`Calling Gemini API with mimeType: ${mimeTypeForGemini}, dataLength: ${base64Data.length}...`);
         const geminiResponse = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

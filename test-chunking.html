@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Compression Test - Debug FFmpeg Process</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            margin-bottom: 20px;
+            transition: all 0.3s ease;
+        }
+        
+        .upload-area:hover {
+            border-color: #007bff;
+            background-color: #f8f9fa;
+        }
+        
+        .upload-area.dragover {
+            border-color: #007bff;
+            background-color: #e7f3ff;
+        }
+        
+        input[type="file"] {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            margin: 5px;
+            transition: background-color 0.2s;
+        }
+        
+        button:hover {
+            background-color: #0056b3;
+        }
+        
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        
+        .info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .info-box {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #007bff;
+        }
+        
+        .info-box h3 {
+            margin-top: 0;
+            color: #333;
+        }
+        
+        .progress-container {
+            margin: 20px 0;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background-color: #28a745;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        
+        .log-container {
+            background: #1e1e1e;
+            color: #f8f9fa;
+            padding: 20px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+        
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 2px 0;
+        }
+        
+        .log-error {
+            color: #ff6b6b;
+        }
+        
+        .log-success {
+            color: #51cf66;
+        }
+        
+        .log-warning {
+            color: #ffd43b;
+        }
+        
+        .log-info {
+            color: #74c0fc;
+        }
+        
+        .output-container {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+        }
+
+        .output-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #dee2e6;
+        }
+        
+        .output-item:last-child {
+            border-bottom: none;
+        }
+        
+        .status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        
+        .status-pending {
+            background-color: #f8f9fa;
+            color: #6c757d;
+        }
+        
+        .status-processing {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        
+        .status-completed {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        
+        .status-error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        
+        .settings-panel {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+        
+        .settings-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .settings-row label {
+            min-width: 150px;
+            font-weight: 500;
+        }
+        
+        .settings-row input, .settings-row select {
+            flex: 1;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-left: 10px;
+        }
+        
+        .download-btn {
+            background-color: #28a745;
+            font-size: 12px;
+            padding: 6px 12px;
+            margin-left: 10px;
+        }
+        
+        .download-btn:hover {
+            background-color: #218838;
+        }
+        
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎬 Video Compression Test - FFmpeg Debug</h1>
+        
+        <div class="settings-panel">
+            <div class="settings-row">
+                <label for="processingMode">Processing Mode:</label>
+                <select id="processingMode" disabled>
+                    <option value="compress" selected>Compress (Single File)</option>
+                </select>
+            </div>
+            <div class="settings-row" id="codec-settings" style="display: block;">
+                <label for="codec">Codec:</label>
+                <select id="codec">
+                    <option value="libx264">H.264</option>
+                    <option value="libvpx">VP8</option>
+                    <option value="libvpx-vp9">VP9</option>
+                </select>
+            </div>
+            <div class="settings-row" id="quality-settings" style="display: block;">
+                <label for="quality">Quality:</label>
+                <select id="quality">
+                    <option value="low">Low</option>
+                    <option value="medium" selected>Medium</option>
+                    <option value="high">High</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="upload-area" id="drop-area">
+            <p>Drag & drop a video file here, or click to select a file.</p>
+            <input type="file" id="fileElem" accept="video/*" style="display: none;">
+            <p>Or</p>
+            <input type="text" id="fileUrl" placeholder="Enter video URL" style="width: 70%; padding: 8px; margin-bottom: 10px;">
+            <button id="processUrlBtn">Process from URL</button>
+        </div>
+        
+        <div id="processing-info" style="display: none;">
+            <div class="info-grid">
+                <div class="info-box">
+                    <h3>File Information</h3>
+                    <p id="file-info"></p>
+                </div>
+                <div class="info-box">
+                    <h3>Processing Status</h3>
+                    <p id="status"></p>
+                </div>
+            </div>
+            
+            <div class="progress-container">
+                <div class="progress-bar">
+                    <div id="progress-fill" class="progress-fill"></div>
+                </div>
+            </div>
+            
+            <div id="output-list" class="output-container"></div>
+
+            <div class="log-container" id="log-output"></div>
+        </div>
+    </div>
+    
+    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.0/dist/ffmpeg.min.js"></script>
+    <script>
+        const { createFFmpeg, fetchFile } = FFmpeg;
+        let ffmpeg;
+        
+        const fileInput = document.getElementById('fileElem');
+        const urlInput = document.getElementById('fileUrl');
+        const processUrlBtn = document.getElementById('processUrlBtn');
+        const dropArea = document.getElementById('drop-area');
+        const processingInfo = document.getElementById('processing-info');
+        const fileInfoElem = document.getElementById('file-info');
+        const statusElem = document.getElementById('status');
+        const progressFill = document.getElementById('progress-fill');
+        const logOutput = document.getElementById('log-output');
+        const outputList = document.getElementById('output-list');
+        const processingModeSelect = document.getElementById('processingMode');
+        const codecSettings = document.getElementById('codec-settings');
+        const qualitySettings = document.getElementById('quality-settings');
+        const codecSelect = document.getElementById('codec');
+        const qualitySelect = document.getElementById('quality');
+        
+        const MAX_SIZE_MB = 20;
+
+        // Init FFmpeg
+        async function initFFmpeg() {
+            log('info', 'Initializing FFmpeg...');
+            if (!ffmpeg || !ffmpeg.isLoaded()) {
+                ffmpeg = createFFmpeg({
+                    log: true,
+                    corePath: "https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js",
+                });
+                ffmpeg.setLogger(({ type, message }) => {
+                    log(type, message);
+                });
+                ffmpeg.setProgress(({ ratio }) => {
+                    updateProgress(ratio);
+                });
+            }
+            if (!ffmpeg.isLoaded()) {
+                await ffmpeg.load();
+            }
+            log('success', 'FFmpeg initialized.');
+        }
+
+        function log(type, message) {
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.textContent = `[${type.toUpperCase()}] ${message}`;
+            logOutput.appendChild(entry);
+            logOutput.scrollTop = logOutput.scrollHeight;
+        }
+
+        function updateProgress(ratio) {
+            progressFill.style.width = `${Math.round(ratio * 100)}%`;
+        }
+
+        function displayFileInfo(file) {
+            fileInfoElem.innerHTML = `
+                <strong>Name:</strong> ${file.name}<br>
+                <strong>Size:</strong> ${(file.size / 1024 / 1024).toFixed(2)} MB<br>
+                <strong>Type:</strong> ${file.type}
+            `;
+        }
+
+        function addOutputItem(name, size, status, blob) {
+            const item = document.createElement('div');
+            item.className = 'output-item';
+            item.id = `output-${name}`;
+
+            let statusClass = 'status-pending';
+            if (status === 'Processing') statusClass = 'status-processing';
+            if (status === 'Completed') statusClass = 'status-completed';
+            if (status === 'Error') statusClass = 'status-error';
+
+            item.innerHTML = `
+                <span>${name} (${size > 0 ? (size / 1024 / 1024).toFixed(2) + ' MB' : ''})</span>
+                <div>
+                    <span class="status ${statusClass}">${status}</span>
+                </div>
+            `;
+            outputList.appendChild(item);
+
+            if (blob) {
+                const downloadBtn = document.createElement('button');
+                downloadBtn.textContent = 'Download';
+                downloadBtn.className = 'download-btn';
+                downloadBtn.onclick = () => {
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = name;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                };
+                item.querySelector('div').appendChild(downloadBtn);
+            }
+            return item;
+        }
+        
+        dropArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropArea.classList.add('dragover');
+        });
+        
+        dropArea.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dropArea.classList.remove('dragover');
+        });
+        
+        dropArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length) {
+                fileInput.files = files;
+                processMediaWithFile(files[0]);
+            }
+        });
+        
+        dropArea.addEventListener('click', () => {
+            fileInput.click();
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) {
+                processMediaWithFile(e.target.files[0]);
+            }
+        });
+
+        processUrlBtn.addEventListener('click', () => {
+            const url = urlInput.value.trim();
+            if (url) {
+                processMediaWithUrl(url);
+            } else {
+                alert('Please enter a valid URL.');
+            }
+        });
+        
+        async function processMediaWithFile(file) {
+            if (!file) return;
+
+            processingInfo.style.display = 'block';
+            outputList.innerHTML = '';
+            logOutput.innerHTML = '';
+            updateProgress(0);
+
+            displayFileInfo(file);
+            statusElem.textContent = 'Initializing...';
+            
+            try {
+                await initFFmpeg();
+                const data = await fetchFile(file);
+                await ffmpeg.FS('writeFile', file.name, data);
+                statusElem.textContent = 'Ready to process.';
+                await compressVideo(file.name, file.size);
+            } catch (error) {
+                log('error', `An error occurred: ${error.message}`);
+                statusElem.textContent = 'Error';
+            }
+        }
+        
+        async function processMediaWithUrl(url) {
+            processingInfo.style.display = 'block';
+            outputList.innerHTML = '';
+            logOutput.innerHTML = '';
+            updateProgress(0);
+
+            statusElem.textContent = 'Fetching file from URL...';
+            
+            try {
+                await initFFmpeg();
+                
+                let actualFileSize = 0;
+                let fileBlob;
+
+                if (url.startsWith('blob:')) {
+                    log('info', 'Blob URL detected. Fetching directly.');
+                    fileBlob = await fetch(url).then(r => r.blob());
+                    actualFileSize = fileBlob.size;
+                } else {
+                    log('info', `Fetching file from ${url}`);
+                    const response = await fetch(url);
+                    if (!response.ok) {
+                        throw new Error(`Failed to fetch URL: ${response.statusText}`);
+                    }
+                    fileBlob = await response.blob();
+                    actualFileSize = fileBlob.size;
+                }
+
+                const fileName = new URL(url).pathname.split('/').pop() || 'input.mp4';
+                const file = new File([fileBlob], fileName, { type: fileBlob.type });
+
+                displayFileInfo(file);
+                statusElem.textContent = 'File fetched. Writing to FFmpeg FS...';
+                
+                const data = await fetchFile(fileBlob);
+                await ffmpeg.FS('writeFile', fileName, data);
+                
+                statusElem.textContent = 'Ready to process.';
+                await compressVideo(fileName, actualFileSize);
+
+            } catch (error) {
+                log('error', `An error occurred: ${error.message}`);
+                statusElem.textContent = 'Error';
+                console.error(error);
+            }
+        }
+
+        async function getCodecParams(stronger = false) {
+            const codec = codecSelect.value;
+            const quality = qualitySelect.value;
+            let ext = 'mp4';
+            let params = [];
+
+            let qualityMap = { low: 0, medium: 1, high: 2 };
+            
+            const h264_crf = [30, 26, 22]; // Low, Medium, High
+            const vp8_crf = [35, 30, 25];
+            const vp9_crf = [40, 35, 30];
+            
+            let crf_value;
+            let qualityIndex = qualityMap[quality];
+
+            switch(codec) {
+                case 'libvpx': // VP8
+                    ext = 'webm';
+                    crf_value = vp8_crf[qualityIndex] || vp8_crf[1];
+                    if (stronger) crf_value += 5;
+                    params.push('-c:v', 'libvpx', '-crf', crf_value.toString(), '-b:v', '0', '-deadline', 'realtime', '-cpu-used', '8');
+                    break;
+                case 'libvpx-vp9': // VP9
+                    ext = 'webm';
+                    crf_value = vp9_crf[qualityIndex] || vp9_crf[1];
+                    if (stronger) crf_value += 5;
+                    params.push('-c:v', 'libvpx-vp9', '-crf', crf_value.toString(), '-b:v', '0', '-deadline', 'realtime', '-row-mt', '1');
+                    break;
+                default: // H.264
+                    ext = 'mp4';
+                    crf_value = h264_crf[qualityIndex] || h264_crf[1];
+                    if (stronger) crf_value += 4;
+                    params.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', crf_value.toString());
+                    break;
+            }
+            params.push('-c:a', 'aac', '-b:a', '128k');
+            params.push('-vf', 'scale=trunc(iw/2/2)*2:trunc(ih/2/2)*2');
+            params.push('-threads', '1');
+             if (codec === 'libx264') {
+                params.push('-x264-params', 'threads=1:sliced-threads=0');
+            }
+            
+            return { ext, params };
+        }
+
+        async function compressVideo(inputFileName, inputFileSize) {
+            statusElem.textContent = 'Starting compression...';
+            log('info', 'Preparing for full video compression.');
+
+            let outputItem = addOutputItem(`compressing...`, 0, 'Processing');
+
+            try {
+                // First pass
+                const { ext, params: initialParams } = await getCodecParams();
+                const outputFileName = `compressed.${ext}`;
+                
+                outputItem.querySelector('span').textContent = `${outputFileName} (Processing...)`;
+                log('info', `Running FFmpeg with command: ffmpeg -i ${inputFileName} ${initialParams.join(' ')} ${outputFileName}`);
+                await ffmpeg.run('-i', inputFileName, ...initialParams, outputFileName);
+                
+                let data = ffmpeg.FS('readFile', outputFileName);
+                let compressedSize = data.buffer.byteLength;
+                log('success', `Initial compression finished. Size: ${(compressedSize / 1024 / 1024).toFixed(2)} MB`);
+                
+                if (compressedSize > MAX_SIZE_MB * 1024 * 1024) {
+                    log('warning', `File is larger than ${MAX_SIZE_MB}MB. Applying stronger compression.`);
+                    statusElem.textContent = 'Applying stronger compression...';
+                    
+                    ffmpeg.FS('unlink', outputFileName); // Clean up first pass file
+
+                    const { ext: strongerExt, params: strongerParams } = await getCodecParams(true);
+                    const strongerOutputFileName = `compressed_stronger.${strongerExt}`;
+                    
+                    outputItem.querySelector('span').textContent = `${strongerOutputFileName} (Processing...)`;
+                    
+                    log('info', `Running stronger FFmpeg command: ffmpeg -i ${inputFileName} ${strongerParams.join(' ')} ${strongerOutputFileName}`);
+                    await ffmpeg.run('-i', inputFileName, ...strongerParams, strongerOutputFileName);
+
+                    data = ffmpeg.FS('readFile', strongerOutputFileName);
+                    compressedSize = data.buffer.byteLength;
+                    
+                    const blob = new Blob([data.buffer], { type: `video/${strongerExt}` });
+                    outputItem.remove();
+                    addOutputItem(strongerOutputFileName, compressedSize, 'Completed', blob);
+
+                    statusElem.textContent = 'Stronger compression completed.';
+                    log('success', `Final size: ${(compressedSize / 1024 / 1024).toFixed(2)} MB`);
+                    ffmpeg.FS('unlink', strongerOutputFileName);
+                } else {
+                    const blob = new Blob([data.buffer], { type: `video/${ext}` });
+                    outputItem.remove();
+                    addOutputItem(outputFileName, compressedSize, 'Completed', blob);
+                    statusElem.textContent = 'Compression completed.';
+                    ffmpeg.FS('unlink', outputFileName);
+                }
+                
+            } catch (error) {
+                log('error', `Compression failed: ${error}`);
+                outputItem.querySelector('.status').textContent = 'Error';
+                outputItem.querySelector('.status').className = 'status status-error';
+                statusElem.textContent = 'Error during compression.';
+            } finally {
+                updateProgress(0);
+                try {
+                    ffmpeg.FS('unlink', inputFileName);
+                } catch (e) {
+                    // Ignore if file doesn't exist
+                }
+            }
+        }
+        
+        // Init on load
+        document.addEventListener('DOMContentLoaded', () => {
+             initFFmpeg().catch(err => {
+                log('error', 'Could not initialize FFmpeg on startup.');
+                console.error(err);
+            });
+        });
+
+    </script>
+</body>
+</html>

@@ -1,5 +1,5 @@
-// import { browser as polyfillBrowser } from 'webextension-polyfill'; // Removed import
 import browser from 'webextension-polyfill';
+import { compressVideo, type CompressionSettings, type CompressionResult } from '../lib/video-processing';
 
 // Extend the browser types to include offscreen
 declare module 'webextension-polyfill' {
@@ -128,6 +128,7 @@ async function deleteFileFromDB(key: IDBValidKey): Promise<void> {
 
 const CLOUD_FUNCTION_URL = 'https://us-central1-symm-gemini.cloudfunctions.net/generateAltTextProxy';
 const SINGLE_FILE_DIRECT_LIMIT = 19 * 1024 * 1024; // 19MB
+const TOTAL_MEDIA_SIZE_LIMIT = 100 * 1024 * 1024; // 100MB total for original media file
 const MAX_CHUNKS = 15; 
 
 let contentScriptPort: any = null; // Changed to any to avoid type errors
@@ -401,117 +402,144 @@ async function getMediaDurationViaFFmpeg(mediaSrcUrl: string, mediaType: string,
     throw new Error('Could not get media duration via FFmpeg.');
 }
 
+// New function to chunk large videos using FFmpeg
+async function chunkVideoWithFFmpeg(mediaSrcUrl: string, fileName: string, mediaType: string, port: any): Promise<Array<{ base64Data: string; mimeType: string; fileSize: number; }> | null> {
+    try {
+        port.postMessage({ type: 'progress', message: `Getting video duration for chunking...`, originalSrcUrl: mediaSrcUrl });
+        
+        // First get the video duration
+        const duration = await getMediaDurationViaFFmpeg(mediaSrcUrl, mediaType, fileName);
+        if (duration <= 0) {
+            throw new Error('Could not determine video duration for chunking');
+        }
 
-// Renamed from processMediaWithFFmpegAndCloud and adapted for URL input
+        console.log(`[chunkVideoWithFFmpeg] Video duration: ${duration}s`);
+        
+        // Calculate chunk parameters
+        // Assume average bitrate and calculate segment duration to stay under limit
+        // Since we don't have exact file size, use a conservative approach
+        const maxSegmentDuration = Math.min(Math.max(duration / MAX_CHUNKS, 10), 60); // 10-60 seconds per chunk
+        const numChunks = Math.min(Math.ceil(duration / maxSegmentDuration), MAX_CHUNKS);
+        
+        console.log(`[chunkVideoWithFFmpeg] Planning to create ${numChunks} chunks with ~${maxSegmentDuration}s each`);
+        port.postMessage({ type: 'progress', message: `Creating ${numChunks} video chunks...`, originalSrcUrl: mediaSrcUrl });
+
+        const chunks = [];
+        for (let i = 0; i < numChunks; i++) {
+            const startTime = i * maxSegmentDuration;
+            const chunkDuration = Math.min(maxSegmentDuration, duration - startTime);
+            
+            if (chunkDuration <= 0.1) break; // Skip tiny chunks
+            
+            port.postMessage({ 
+                type: 'progress', 
+                message: `Processing chunk ${i + 1}/${numChunks} (${startTime.toFixed(1)}s - ${(startTime + chunkDuration).toFixed(1)}s)...`, 
+                originalSrcUrl: mediaSrcUrl 
+            });
+
+            try {
+                // Extract this chunk using FFmpeg
+                const chunkFileName = `chunk_${i + 1}.mp4`;
+                const chunkResult = await runFFmpegInOffscreen(
+                    'extractChunk',
+                    [
+                        '-ss', startTime.toString(),
+                        '-i', fileName,
+                        '-t', chunkDuration.toString(),
+                        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
+                        '-c:a', 'aac', '-b:a', '96k',
+                        '-avoid_negative_ts', 'make_zero',
+                        '-movflags', 'faststart',
+                        chunkFileName
+                    ],
+                    { srcUrl: mediaSrcUrl, mediaType, fileName },
+                    chunkFileName
+                );
+
+                if (chunkResult.success && chunkResult.data) {
+                    const base64Data = uint8ArrayToBase64(new Uint8Array(chunkResult.data));
+                    chunks.push({
+                        base64Data: base64Data,
+                        mimeType: 'video/mp4',
+                        fileSize: chunkResult.data.byteLength
+                    });
+                    console.log(`[chunkVideoWithFFmpeg] Chunk ${i + 1} created: ${(chunkResult.data.byteLength / (1024 * 1024)).toFixed(1)}MB`);
+                } else {
+                    console.warn(`[chunkVideoWithFFmpeg] Failed to create chunk ${i + 1}`);
+                    // Continue with other chunks instead of failing completely
+                }
+            } catch (chunkError: any) {
+                console.warn(`[chunkVideoWithFFmpeg] Error creating chunk ${i + 1}: ${chunkError.message}`);
+                // Continue with other chunks
+            }
+        }
+
+        if (chunks.length === 0) {
+            throw new Error('No video chunks were successfully created');
+        }
+
+        console.log(`[chunkVideoWithFFmpeg] Successfully created ${chunks.length} chunks`);
+        return chunks;
+
+    } catch (error: any) {
+        console.error(`[chunkVideoWithFFmpeg] Failed to chunk video: ${error.message}`);
+        return null;
+    }
+}
+
+// Process media using the new compression approach
 async function processMediaWithUrl(
     mediaSrcUrl: string,
-    fileName: string, // Original fileName from content script
+    fileName: string,
     mediaType: string,
     generationType: 'altText' | 'captions',
-    port: any, // Changed to any to avoid type errors
+    port: any,
     videoMetadata?: { duration?: number; width?: number; height?: number } | null
 ): Promise<void> {
     console.log(`[processMediaWithUrl] Processing ${fileName} (${mediaType}) for ${generationType} from URL: ${mediaSrcUrl}`);
     try {
         port.postMessage({ type: 'progress', message: `Processing ${fileName}...`, originalSrcUrl: mediaSrcUrl });
 
+        // First, fetch the media file
+        let blob: Blob;
+        try {
+            port.postMessage({ type: 'progress', message: `Fetching ${fileName}...`, originalSrcUrl: mediaSrcUrl });
+            const response = await fetch(mediaSrcUrl);
+            if (!response.ok) throw new Error(`Failed to fetch media: ${response.statusText}`);
+            blob = await response.blob();
+        } catch (error: any) {
+            throw new Error(`Failed to fetch media: ${error.message}`);
+        }
+
+        // Check total file size limit
+        if (blob.size > TOTAL_MEDIA_SIZE_LIMIT) {
+            throw new Error(`File is too large (${(blob.size / (1024 * 1024)).toFixed(1)}MB). Maximum size is ${TOTAL_MEDIA_SIZE_LIMIT / (1024 * 1024)}MB.`);
+        }
+
+        // Create File object for processing
+        const file = new File([blob], fileName, { type: mediaType });
+        
         const isGeneratingCaptions = generationType === 'captions';
 
         if (isGeneratingCaptions) {
-            const vttResult = await runFFmpegInOffscreen(
-                'generateVTT',
-                ['-i', fileName, '-an', '-vn', '-scodec', 'webvtt', '-f', 'vtt', 'output.vtt'],
-                {srcUrl: mediaSrcUrl, mediaType, fileName},
-                'output.vtt'
-            );
-            if (vttResult.success && vttResult.data) {
-                const vttContent = new TextDecoder().decode(vttResult.data);
-                port.postMessage({ type: 'captionResult', vttResults: [{fileName: vttResult.fileName || fileName + '.vtt', vttContent }], originalSrcUrl: mediaSrcUrl });
-            } else {
-                throw new Error('FFmpeg failed to produce VTT output or data was not ArrayBuffer.');
-            }
-        } else if (generationType === 'altText') {
-            // For alt text, if it's a video, we might need FFmpeg to extract a frame first.
-            // If it's an image, we might fetch it and send to cloud.
-            // This logic needs to be more robust.
-
-            let dataForCloud: { base64Data: string; mimeType: string; fileSize: number; };
-
-            // Check if this is a GIF or other simple media that can be sent directly to cloud
-            const isSimpleMedia = mediaType === 'image/gif' || mediaType.startsWith('image/');
+            // For captions, we'll send the original file to the cloud function
+            // The cloud function will handle caption generation using Gemini
+            port.postMessage({ type: 'progress', message: `Generating captions for ${fileName}...`, originalSrcUrl: mediaSrcUrl });
             
-            if ((mediaType.startsWith('video/') || mediaType === 'image/gif') && !isSimpleMedia) { 
-                // Complex video processing - needs FFmpeg for frame extraction
-                port.postMessage({ type: 'progress', message: `Extracting frame from ${fileName} for alt text...`, originalSrcUrl: mediaSrcUrl });
-                try {
-                    const frameResult = await runFFmpegInOffscreen(
-                        'extractFrame',
-                        ['-i', fileName, '-vf', 'select=eq(n\,0)', '-q:v', '3', 'frame.jpg', '-f', 'image2'],
-                        { srcUrl: mediaSrcUrl, mediaType, fileName },
-                        'frame.jpg'
-                    );
-                    if (frameResult.success && frameResult.data) {
-                        const imageBase64 = uint8ArrayToBase64(new Uint8Array(frameResult.data));
-                        dataForCloud = {
-                            base64Data: imageBase64,
-                            mimeType: 'image/jpeg', // Output of FFmpeg command
-                            fileSize: frameResult.data.byteLength
-                        };
-                    } else {
-                        throw new Error('FFmpeg failed to extract frame for alt text.');
-                    }
-                } catch (ffmpegError: any) {
-                    console.warn(`[processMediaWithUrl] FFmpeg failed for ${fileName}, trying fallback approach:`, ffmpegError.message);
-
-                    // Fallback: treat as simple media and send directly to cloud
-                    port.postMessage({ type: 'progress', message: `FFmpeg failed, sending ${fileName} directly to cloud for alt text...`, originalSrcUrl: mediaSrcUrl });
-                    const response = await fetch(mediaSrcUrl);
-                    if (!response.ok) throw new Error(`Failed to fetch ${fileName}: ${response.statusText}`);
-                    const blob = await response.blob();
-                    if (blob.size > SINGLE_FILE_DIRECT_LIMIT) {
-                        port.postMessage({ type: 'warning', message: `Media ${fileName} is large (${(blob.size / (1024 * 1024)).toFixed(1)}MB), direct cloud processing might be slow or fail.`, originalSrcUrl: mediaSrcUrl });
-                    }
-                    const arrayBuffer = await blob.arrayBuffer();
-                    dataForCloud = {
-                        base64Data: uint8ArrayToBase64(new Uint8Array(arrayBuffer)),
-                        mimeType: blob.type || mediaType,
-                        fileSize: blob.size
-                    };
-                }
-            } else if (mediaType.startsWith('image/')) {
-                // Direct image processing - fetch and convert to base64
-                port.postMessage({ type: 'progress', message: `Fetching ${fileName} for alt text...`, originalSrcUrl: mediaSrcUrl });
-                const response = await fetch(mediaSrcUrl);
-                if (!response.ok) throw new Error(`Failed to fetch image ${fileName}: ${response.statusText}`);
-                const blob = await response.blob();
-                if (blob.size > SINGLE_FILE_DIRECT_LIMIT) {
-                    port.postMessage({ type: 'warning', message: `Image ${fileName} is large (${(blob.size / (1024 * 1024)).toFixed(1)}MB), direct cloud processing might be slow or fail.`, originalSrcUrl: mediaSrcUrl });
-                }
-                const arrayBuffer = await blob.arrayBuffer();
-                dataForCloud = {
-                    base64Data: uint8ArrayToBase64(new Uint8Array(arrayBuffer)),
-                    mimeType: blob.type || mediaType,
-                    fileSize: blob.size
-                };
-            } else {
-                throw new Error(`Unsupported media type for alt text: ${mediaType}`);
-            }
-
-            const requestPayload: RequestPayload = {
-                base64Data: dataForCloud.base64Data,
-                mimeType: dataForCloud.mimeType,
-                fileName: fileName, // original filename
-                fileSize: dataForCloud.fileSize,
-                isChunk: false,
-                chunkIndex: 0,
-                totalChunks: 1,
+            const base64Data = await blobToBase64(blob);
+            const requestPayload = {
+                base64Data: base64Data,
+                mimeType: blob.type || mediaType,
+                fileName: fileName,
+                fileSize: blob.size,
+                action: 'generateCaptions',
+                duration: videoMetadata?.duration,
+                isVideo: true,
                 videoDuration: videoMetadata?.duration,
                 videoWidth: videoMetadata?.width,
                 videoHeight: videoMetadata?.height,
-                action: isGeneratingCaptions ? 'generateCaptions' : undefined,
             };
 
-            port.postMessage({ type: 'progress', message: `Sending ${fileName} to cloud for alt text...`, originalSrcUrl: mediaSrcUrl });
             const response = await fetch(CLOUD_FUNCTION_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -522,7 +550,140 @@ async function processMediaWithUrl(
                 const errorText = await response.text();
                 throw new Error(`Cloud function error: ${response.status} ${errorText}`);
             }
+
             const result = await response.json();
+            if (result.error) throw new Error(result.error);
+            
+            if (result.vttContent) {
+                port.postMessage({ 
+                    type: 'captionResult', 
+                    vttResults: [{ fileName: fileName + '.vtt', vttContent: result.vttContent }], 
+                    originalSrcUrl: mediaSrcUrl 
+                });
+            } else {
+                throw new Error('No VTT content received from cloud function');
+            }
+        } else if (generationType === 'altText') {
+            // For alt text, determine if we need compression
+            const isVideo = mediaType.startsWith('video/') || mediaType === 'image/gif' || mediaType === 'image/webp' || mediaType === 'image/apng';
+            const isLargeFile = blob.size > SINGLE_FILE_DIRECT_LIMIT;
+            
+            console.log(`[processMediaWithUrl] File size: ${(blob.size / (1024 * 1024)).toFixed(1)}MB, isVideo: ${isVideo}, needsCompression: ${isLargeFile}`);
+            
+            let processedBlob = blob;
+            let processedFileName = fileName;
+
+            // If we need compression, use our new compression functionality
+            if (isLargeFile && isVideo) {
+                port.postMessage({ type: 'progress', message: `Compressing ${fileName} for processing...`, originalSrcUrl: mediaSrcUrl });
+                
+                try {
+                    // Use VP9 for best compression on large files
+                    const compressionSettings: CompressionSettings = {
+                        codec: 'libvpx-vp9',
+                        quality: 'medium',
+                        maxSizeMB: SINGLE_FILE_DIRECT_LIMIT / (1024 * 1024)
+                    };
+                    
+                    let compressionResult: CompressionResult | null = null;
+                    
+                    // Try to use offscreen document first if available
+                    if (await hasOffscreenDocument()) {
+                        try {
+                            const fileArrayBuffer = await file.arrayBuffer();
+                            const response = await browser.runtime.sendMessage({
+                                target: 'offscreen-ffmpeg',
+                                type: 'compressVideo',
+                                payload: {
+                                    fileData: fileArrayBuffer,
+                                    fileName: fileName,
+                                    mimeType: mediaType,
+                                    compressionSettings: compressionSettings
+                                }
+                            });
+                            
+                            if (response && response.success) {
+                                const compressedBlob = new Blob([response.data], { type: 'video/webm' });
+                                compressionResult = {
+                                    blob: compressedBlob,
+                                    originalSize: response.originalSize,
+                                    compressedSize: response.compressedSize,
+                                    compressionRatio: response.compressionRatio,
+                                    codec: response.codec,
+                                    quality: response.quality
+                                };
+                            } else {
+                                console.warn('[Background] Offscreen compression failed:', response?.error);
+                            }
+                        } catch (offscreenError: any) {
+                            console.warn('[Background] Offscreen compression error:', offscreenError.message);
+                        }
+                    }
+                    
+                    // Fallback to direct compression if offscreen failed
+                    if (!compressionResult) {
+                        compressionResult = await compressVideo(file, compressionSettings);
+                    }
+                    
+                    if (compressionResult) {
+                        processedBlob = compressionResult.blob;
+                        processedFileName = `compressed_${fileName.split('.')[0]}.webm`;
+                        
+                        const compressionRatio = ((1 - compressionResult.compressedSize / compressionResult.originalSize) * 100).toFixed(1);
+                        port.postMessage({ 
+                            type: 'progress', 
+                            message: `Compressed ${fileName} by ${compressionRatio}% (${(compressionResult.originalSize / (1024 * 1024)).toFixed(1)}MB → ${(compressionResult.compressedSize / (1024 * 1024)).toFixed(1)}MB)`, 
+                            originalSrcUrl: mediaSrcUrl 
+                        });
+                        
+                        console.log(`[processMediaWithUrl] Successfully compressed ${fileName}: ${(compressionResult.originalSize / (1024 * 1024)).toFixed(1)}MB → ${(compressionResult.compressedSize / (1024 * 1024)).toFixed(1)}MB`);
+                    } else {
+                        throw new Error('Compression failed - no result returned');
+                    }
+                } catch (compressionError: any) {
+                    console.warn(`[processMediaWithUrl] Compression failed for ${fileName}:`, compressionError.message);
+                    port.postMessage({ type: 'warning', message: `Compression failed, processing original file...`, originalSrcUrl: mediaSrcUrl });
+                    // Continue with original file
+                }
+            }
+            
+            // Process the file (either original or compressed) for alt text
+            const processingType = isVideo ? 'video/media' : 'image';
+            const sizeMsg = ` (${(processedBlob.size / (1024 * 1024)).toFixed(1)}MB)`;
+            
+            port.postMessage({ type: 'progress', message: `Processing ${processedFileName}${sizeMsg} for alt text...`, originalSrcUrl: mediaSrcUrl });
+            
+            if (processedBlob.size > SINGLE_FILE_DIRECT_LIMIT) {
+                port.postMessage({ type: 'warning', message: `${processingType} ${processedFileName} is still large${sizeMsg}, processing might be slow.`, originalSrcUrl: mediaSrcUrl });
+            }
+            
+            const base64Data = await blobToBase64(processedBlob);
+            const requestPayload: RequestPayload = {
+                base64Data: base64Data,
+                mimeType: processedBlob.type || mediaType,
+                fileName: processedFileName,
+                fileSize: processedBlob.size,
+                isChunk: false,
+                chunkIndex: 0,
+                totalChunks: 1,
+                isVideo: isVideo,
+                videoDuration: videoMetadata?.duration,
+                videoWidth: videoMetadata?.width,
+                videoHeight: videoMetadata?.height,
+            };
+
+            port.postMessage({ type: 'progress', message: `Sending ${processedFileName} to cloud for alt text...`, originalSrcUrl: mediaSrcUrl });
+            const finalResponse = await fetch(CLOUD_FUNCTION_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestPayload),
+            });
+
+            if (!finalResponse.ok) {
+                const errorText = await finalResponse.text();
+                throw new Error(`Cloud function error: ${finalResponse.status} ${errorText}`);
+            }
+            const result = await finalResponse.json();
             if (result.error) throw new Error(result.error);
             
             port.postMessage({ type: 'altTextResult', altText: result.altText, originalSrcUrl: mediaSrcUrl });
@@ -533,7 +694,22 @@ async function processMediaWithUrl(
     }
 }
 
-// Helper function: Uint8Array to Base64 (needed for dataForCloud)
+// Helper function: Blob to Base64
+async function blobToBase64(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const result = reader.result as string;
+            // Extract the base64 part without the prefix
+            const base64 = result.split(',')[1];
+            resolve(base64);
+        };
+        reader.onerror = error => reject(error);
+        reader.readAsDataURL(blob);
+    });
+}
+
+// Helper function: Uint8Array to Base64 (backup)
 function uint8ArrayToBase64(bytes: Uint8Array): string {
     let binary = '';
     const len = bytes.byteLength;
@@ -548,10 +724,10 @@ export default {
     main() {
         console.log('[Background] Service worker main() executed. Setting up listeners.');
 
-        // Start loading FFmpeg right away when the extension starts
-        console.log('[Background] Preloading FFmpeg on browser start...');
+        // Start loading offscreen document for video compression
+        console.log('[Background] Setting up offscreen document for video compression...');
         setupOffscreenDocument(OFFSCREEN_DOCUMENT_PATH).catch((err: Error) => {
-            console.warn("[Background] Initial FFmpeg preloading failed:", err.message);
+            console.warn("[Background] Initial offscreen document setup failed:", err.message);
         });
 
         // Listener for long-lived port connections from content scripts
@@ -563,15 +739,23 @@ export default {
                 contentScriptPort = port;
                 console.log('[Background] Content script connected via port:', port.sender?.tab?.id ? `Tab ID ${port.sender.tab.id}` : 'Unknown tab');
 
-                // When a port connects, ensure FFmpeg is loading/loaded but don't block
+                // Send ready status to content script
+                if (contentScriptPort && contentScriptPort === port) { 
+                    contentScriptPort.postMessage({ 
+                        type: 'ffmpegStatus', 
+                        status: 'Video compression ready', 
+                        error: false
+                    });
+                }
+
+                // Ensure offscreen document is set up when content script connects
                 setupOffscreenDocument(OFFSCREEN_DOCUMENT_PATH).catch((err: Error) => {
-                    console.warn("[Background] Offscreen Document setup/FFmpeg load failed:", err.message);
+                    console.warn("[Background] Offscreen document setup failed on connection:", err.message);
                     if (contentScriptPort && contentScriptPort === port) { 
                         contentScriptPort.postMessage({ 
                             type: 'ffmpegStatus', 
-                            status: 'FFmpeg initial setup error: ' + err.message, 
-                            error: true,
-                            firstLoadMessage: 'FFmpeg is loading. The first load can take up to 5 minutes. Future loads will be faster.'
+                            status: 'Video compression setup error: ' + err.message, 
+                            error: true
                         });
                     }
                 });
@@ -609,7 +793,14 @@ export default {
         
         // Add listener for runtime messages (e.g., from content script sendMessage)
         browser.runtime.onMessage.addListener(async (message: any, sender: any) => {
-            console.log('[Background] Received runtime message:', message.type, 'from:', sender.tab?.id);
+            const senderInfo = sender.tab?.id ? `Tab ID ${sender.tab.id}` : 
+                              sender.url?.includes('offscreen.html') ? 'Offscreen Document' : 
+                              'Unknown Context';
+            
+            // Only log important messages to reduce noise
+            if (message.type !== 'ffmpegLogOffscreen' || message.payload?.type === 'error') {
+                console.log('[Background] Received runtime message:', message.type, 'from:', senderInfo);
+            }
             
             if (message.type === 'processLargeMediaViaSendMessage') {
                 // Handle media processing request from content script
@@ -625,15 +816,12 @@ export default {
                         return { error: 'No active connection to content script' };
                     }
                     
-                    // Check if FFmpeg is ready
-                    if (!ffmpegReady) {
-                        contentScriptPort.postMessage({ 
-                            type: 'ffmpegStatus', 
-                            status: 'FFmpeg is still loading, please wait...', 
-                            loading: true,
-                            firstLoadMessage: 'FFmpeg is loading. The first load can take up to 5 minutes. Future loads will be faster.'
-                        });
-                    }
+                    // Send processing status
+                    contentScriptPort.postMessage({ 
+                        type: 'ffmpegStatus', 
+                        status: 'Processing media...', 
+                        loading: true
+                    });
                     
                     // Process the media using the URL
                     await processMediaWithUrl(
@@ -649,6 +837,21 @@ export default {
                 } catch (error: any) {
                     console.error('[Background] Error processing media:', error);
                     return { error: error.message };
+                }
+            }
+            
+            // Handle offscreen FFmpeg status messages
+            if (message.type === 'ffmpegStatusOffscreen') {
+                console.log('[Background] Received offscreen FFmpeg status:', message.payload);
+                if (contentScriptPort) {
+                    contentScriptPort.postMessage({
+                        type: 'ffmpegStatus',
+                        status: message.payload.progress === 'complete' ? 'Video compression ready' : 
+                               message.payload.progress === 'error' ? `Error: ${message.payload.error}` : 
+                               'Video compression loading...',
+                        error: message.payload.progress === 'error',
+                        loading: message.payload.progress !== 'complete' && message.payload.progress !== 'error'
+                    });
                 }
             }
             
