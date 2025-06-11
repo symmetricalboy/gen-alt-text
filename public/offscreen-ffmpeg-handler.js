@@ -45,21 +45,82 @@ async function getFFmpegInstance() {
     loadInProgress = true;
     loadPromise = new Promise(async (resolve, reject) => {
         try {
-            // For FFmpeg v0.12.6, we expect the main FFmpeg class to be available.
-            // This might be on self.FFmpeg.FFmpeg or directly as FFmpeg depending on how v0.12.6's ffmpeg.min.js is structured.
-            // Adjust this check if FFmpeg is exposed differently by your new v0.12.6 ffmpeg.min.js file.
-            if (typeof self.FFmpegWASM === 'undefined' || typeof self.FFmpegWASM.FFmpeg !== 'function') {
-                const errorMsg = 'self.FFmpegWASM.FFmpeg class is not available. ffmpeg.min.js (v0.12.6 wrapper) might have failed to load or initialize correctly.';
-                console.error('[Offscreen]', errorMsg);
-                throw new Error(errorMsg);
+            // For FFmpeg v0.11.x, we use createFFmpeg function
+            let createFFmpegFunc = null;
+            
+            // Check for createFFmpeg function (v0.11.x style) - prioritize self.FFmpeg.createFFmpeg
+            if (typeof self.FFmpeg === 'object' && self.FFmpeg !== null && typeof self.FFmpeg.createFFmpeg === 'function') {
+                createFFmpegFunc = self.FFmpeg.createFFmpeg;
+                console.log('[Offscreen] Found createFFmpeg at self.FFmpeg.createFFmpeg (v0.11.x)');
+            } else if (typeof self.createFFmpeg === 'function') {
+                createFFmpegFunc = self.createFFmpeg;
+                console.log('[Offscreen] Found createFFmpeg at self.createFFmpeg (v0.11.x)');
+            } else if (typeof createFFmpeg === 'function') {
+                createFFmpegFunc = createFFmpeg;
+                console.log('[Offscreen] Found createFFmpeg at global createFFmpeg (v0.11.x)');
+            } else {
+                // Debug what's actually available with detailed logging
+                console.error('[Offscreen] createFFmpeg not found. Detailed debugging:');
+                console.error('typeof self.createFFmpeg:', typeof self.createFFmpeg);
+                console.error('typeof createFFmpeg:', typeof createFFmpeg);
+                console.error('typeof self.FFmpeg:', typeof self.FFmpeg);
+                console.error('typeof FFmpeg:', typeof FFmpeg);
+                
+                const ffmpegKeys = Object.keys(self).filter(k => k.toLowerCase().includes('ffmpeg'));
+                console.error('FFmpeg-related keys in self:', ffmpegKeys);
+                
+                // Log all available keys for debugging
+                console.error('All self keys:', Object.keys(self).slice(0, 20));
+                
+                // Show what's available for debugging
+                if (typeof self.FFmpeg === 'object' && self.FFmpeg !== null) {
+                    console.error('self.FFmpeg object keys:', Object.keys(self.FFmpeg));
+                }
+                
+                // Check if there's a global FFmpeg with createFFmpeg
+                if (typeof FFmpeg === 'object' && FFmpeg !== null) {
+                    console.error('global FFmpeg object keys:', Object.keys(FFmpeg));
+                    if (typeof FFmpeg.createFFmpeg === 'function') {
+                        createFFmpegFunc = FFmpeg.createFFmpeg;
+                        console.log('[Offscreen] Found createFFmpeg at FFmpeg.createFFmpeg');
+                    }
+                }
+                
+                if (!createFFmpegFunc) {
+                    throw new Error('createFFmpeg function not found. Check if ffmpeg.min.js (v0.11.x) loaded correctly.');
+                }
             }
 
-            console.log('[Offscreen] Attempting to instantiate new self.FFmpegWASM.FFmpeg() for v0.12.6...');
+            console.log('[Offscreen] Attempting to create FFmpeg instance (v0.11.x)...');
             
-            const newInstance = new self.FFmpegWASM.FFmpeg();
+            // Create FFmpeg instance with explicit paths for v0.11.x
+            const coreURL = runtimeAPI.runtime.getURL('assets/ffmpeg/ffmpeg-core.js');
+            const wasmURL = runtimeAPI.runtime.getURL('assets/ffmpeg/ffmpeg-core.wasm');
+            
+            console.log('[Offscreen] FFmpeg core URLs:', { coreURL, wasmURL });
+            
+            // Test if files are accessible before creating FFmpeg instance
+            console.log('[Offscreen] Testing file accessibility...');
+            const coreExists = await checkFileExists(coreURL);
+            const wasmExists = await checkFileExists(wasmURL);
+            
+            if (!coreExists) {
+                throw new Error(`FFmpeg core file not accessible at: ${coreURL}`);
+            }
+            if (!wasmExists) {
+                throw new Error(`FFmpeg WASM file not accessible at: ${wasmURL}`);
+            }
+            
+            console.log('[Offscreen] Both core files are accessible, creating FFmpeg instance...');
+            
+            const newInstance = createFFmpegFunc({
+                corePath: coreURL,
+                wasmPath: wasmURL,
+                log: true // Enable logging
+            });
 
-            // Setup log and progress handlers using the .on() method
-            newInstance.on('log', ({ type, message }) => {
+            // Setup log and progress handlers for v0.11.x
+            newInstance.setLogger(({ type, message }) => {
                 console.log(`[FFmpeg Internal Log - ${type}] ${message}`);
                 runtimeAPI.runtime.sendMessage({ 
                     type: 'ffmpegLogOffscreen', 
@@ -67,10 +128,9 @@ async function getFFmpegInstance() {
                 }).catch(e => console.warn('[Offscreen] Error sending core log message:', e.message));
             });
 
-            newInstance.on('progress', (progress) => { 
-                const ratio = progress.ratio !== undefined ? progress.ratio : (progress.time && progress.duration ? progress.time / progress.duration : undefined);
-                console.log('[Offscreen] FFmpeg Load/Exec Progress (v0.12.6):', progress);
-                if (ratio !== undefined) {
+            newInstance.setProgress(({ ratio, time, speed }) => { 
+                console.log('[Offscreen] FFmpeg Load/Exec Progress (v0.11.x):', { ratio, time, speed });
+                if (ratio !== undefined && ratio >= 0) {
                     runtimeAPI.runtime.sendMessage({ 
                         type: 'ffmpegStatusOffscreen', 
                         payload: { 
@@ -87,83 +147,70 @@ async function getFFmpegInstance() {
             try {
                 runtimeAPI.runtime.sendMessage({ 
                     type: 'ffmpegStatusOffscreen', 
-                    payload: { status: 'FFmpeg instance created, calling load() with explicit paths (v0.12.6)', progress: 'start' }
+                    payload: { status: 'FFmpeg v0.11.x instance created, loading core...', progress: 'start' }
                 }).catch(e => console.warn('[Offscreen] Error sending FFmpeg load start message:', e.message));
             } catch (e) {
                 console.warn('[Offscreen] Error sending FFmpeg load start message:', e);
             }
             
-            console.log('[Offscreen] FFmpeg instance created. Now calling newInstance.load() with configuration.');
+            console.log('[Offscreen] FFmpeg v0.11.x instance created. Now calling newInstance.load().');
 
-            const coreURL = runtimeAPI.runtime.getURL('assets/ffmpeg/ffmpeg-core.js');
-            const wasmURL = runtimeAPI.runtime.getURL('assets/ffmpeg/ffmpeg-core.wasm');
-
-            console.log(`[Offscreen] Resolved coreURL: ${coreURL}`);
-            console.log(`[Offscreen] Resolved wasmURL: ${wasmURL}`);
-
-            // Check if core files are fetchable
-            try {
-                const coreResponse = await fetch(coreURL, { method: 'HEAD' });
-                if (!coreResponse.ok) {
-                    throw new Error(`Failed to fetch ffmpeg-core.js: ${coreResponse.status} ${coreResponse.statusText}`);
-                }
-                console.log('[Offscreen] ffmpeg-core.js HEAD request successful.');
-
-                const wasmResponse = await fetch(wasmURL, { method: 'HEAD' });
-                if (!wasmResponse.ok) {
-                    throw new Error(`Failed to fetch ffmpeg-core.wasm: ${wasmResponse.status} ${wasmResponse.statusText}`);
-                }
-                console.log('[Offscreen] ffmpeg-core.wasm HEAD request successful.');
-            } catch (fetchError) {
-                console.error('[Offscreen] Error fetching core FFmpeg files:', fetchError);
-                throw new Error(`Core FFmpeg file fetch error: ${fetchError.message}`);
-            }
-
-            const loadTimeoutDuration = 180000; // 3 minutes
+            const loadTimeoutDuration = 60000; // 1 minute timeout
             const loadTimeout = setTimeout(() => {
-                console.error(`[Offscreen] FFmpeg newInstance.load() timed out after ${loadTimeoutDuration / 1000}s`);
-                // Make sure to call reject on the outer promise
+                console.error(`[Offscreen] FFmpeg v0.11.x load() timed out after ${loadTimeoutDuration / 1000}s`);
                 loadInProgress = false; // Reset progress flag
-                reject(new Error(`FFmpeg newInstance.load() timed out after ${loadTimeoutDuration / 1000}s`));
+                reject(new Error(`FFmpeg v0.11.x load() timed out after ${loadTimeoutDuration / 1000}s. Check network connectivity and file availability.`));
             }, loadTimeoutDuration);
 
-            console.log('[Offscreen] About to call newInstance.load() with configuration:', {
-                coreURL: coreURL,
-                wasmURL: wasmURL,
-                log: true
-            });
-            
             try {
-                console.log('[Offscreen] Calling newInstance.load()...');
-                await newInstance.load({
-                    coreURL: coreURL, // Use the checked URL
-                    wasmURL: wasmURL, // Use the checked URL
-                    // workerURL: is omitted as per user confirmation no separate worker file for v0.12.6 found
-                    log: true // Keep log: true to enable core logs, which .on('log',...) will pick up
-                });
-                console.log('[Offscreen] newInstance.load() returned successfully.');
+                console.log('[Offscreen] Calling newInstance.load() for v0.11.x...');
+                console.log('[Offscreen] Core paths provided to createFFmpeg:', { coreURL, wasmURL });
+                
+                // For v0.11.x, load() doesn't take parameters - paths were specified in createFFmpeg()
+                await newInstance.load();
+                
+                console.log('[Offscreen] FFmpeg v0.11.x load() returned successfully.');
             } catch (loadError) {
-                console.error('[Offscreen] newInstance.load() threw an error:', loadError);
+                console.error('[Offscreen] FFmpeg v0.11.x load() threw an error:', loadError);
+                console.error('[Offscreen] Error details:', {
+                    name: loadError.name,
+                    message: loadError.message,
+                    stack: loadError.stack
+                });
+                
+                // Try to provide more specific error information
+                if (loadError.message.includes('fetch')) {
+                    console.error('[Offscreen] This appears to be a network/fetch error. Checking if files are still accessible...');
+                    try {
+                        await checkFileExists(coreURL);
+                        await checkFileExists(wasmURL);
+                    } catch (recheckError) {
+                        console.error('[Offscreen] Recheck failed:', recheckError);
+                    }
+                }
+                
                 clearTimeout(loadTimeout);
-                throw loadError;
+                throw new Error(`FFmpeg load failed: ${loadError.message}. Core URL: ${coreURL}, WASM URL: ${wasmURL}`);
             }
             
             clearTimeout(loadTimeout);
-            console.log('[Offscreen] newInstance.load() completed successfully.');
+            console.log('[Offscreen] FFmpeg v0.11.x load() completed successfully.');
 
-            // Verify with a -version call if possible, or a simple FS operation
+            // Verify with a simple FS operation using v0.11.x API
             try {
-                await newInstance.FS('writeFile', 'test.txt', 'hello');
-                const data = await newInstance.FS('readFile', 'test.txt');
-                await newInstance.FS('unlink', 'test.txt');
-                if (new TextDecoder().decode(data) === 'hello') {
-                    console.log('[Offscreen] FFmpeg instance FS check passed.');
+                // FFmpeg.wasm v0.11.x uses .FS() method
+                newInstance.FS('writeFile', 'test.txt', 'hello');
+                const data = newInstance.FS('readFile', 'test.txt');
+                newInstance.FS('unlink', 'test.txt');
+                const text = typeof data === 'string' ? data : new TextDecoder().decode(data);
+                if (text === 'hello') {
+                    console.log('[Offscreen] FFmpeg v0.11.x instance FS check passed.');
                 } else {
                      throw new Error('FS check failed to verify read/write.');
                 }
             } catch (verifyError) {
-                console.error('[Offscreen] FFmpeg instance verification (FS check) failed after load():', verifyError);
-                throw new Error(`FFmpeg instance verification failed: ${verifyError.message}`);
+                console.error('[Offscreen] FFmpeg v0.11.x instance verification (FS check) failed after load():', verifyError);
+                throw new Error(`FFmpeg v0.11.x instance verification failed: ${verifyError.message}`);
             }
 
             ffmpegInstance = newInstance;
@@ -187,14 +234,19 @@ async function getFFmpegInstance() {
 runtimeAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[Offscreen] Message received in onMessage listener:', message);
 
+    // Ignore messages that are clearly not intended for offscreen (e.g., content script to background communication)
     if (!message.target) {
-        console.warn('[Offscreen] Received message with no target property. Ignoring. Message:', message);
-        return false;
+        // Only warn for messages that might be intended for offscreen but missing target
+        if (message.type && (message.type.includes('ffmpeg') || message.type.includes('Offscreen') || message.type === 'runFFmpeg' || message.type === 'loadFFmpegOffscreen')) {
+            console.warn('[Offscreen] Received message with no target property that might be intended for offscreen. Message:', message);
+        }
+        // Silently ignore other messages (like content script to background communication)
+        return;
     }
 
     if (message.target !== 'offscreen-ffmpeg') {
         console.log('[Offscreen] Message target \'" + message.target + "\' not for offscreen-ffmpeg, ignoring.');
-        return false;
+        return;
     }
 
     console.log('[Offscreen] Processing message for target offscreen-ffmpeg:', message.type, message.payload?.operationId ? `opId: ${message.payload.operationId}`: '');
@@ -210,8 +262,9 @@ runtimeAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 type: 'ffmpegStatusOffscreen', 
                 payload: { status: `FFmpeg load failed: ${errorMsg}`, error: errorMsg, progress: 'error', timestamp: new Date().toISOString() }
             }).catch(e => console.warn('[Offscreen] Error sending WebAssembly error message:', e.message));
-            // sendResponse({ success: false, error: errorMsg }); // Optional: sendResponse if expecting direct reply
-            return true; // Indicate async handling if sendResponse might be called later, or if message fully handled.
+            
+            // Do not use sendResponse, and do not indicate async response.
+            return; 
         }
         // SharedArrayBuffer check can also remain if relevant for your FFmpeg build/usage
         const hasSharedArrayBuffer = typeof SharedArrayBuffer !== 'undefined';
@@ -226,7 +279,7 @@ runtimeAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     type: 'ffmpegStatusOffscreen', 
                     payload: { status: 'FFmpeg loaded and ready in offscreen document.', progress: 'complete', timestamp: new Date().toISOString() }
                 }).catch(e => console.warn('[Offscreen] Error sending ffmpegStatusOffscreen (success) message:', e.message));
-                // sendResponse({ success: true }); // Optional direct reply
+                // Do not use sendResponse
             })
             .catch(error => {
                 console.error('[Offscreen] FFmpeg getFFmpegInstance failed (from loadFFmpegOffscreen message):', error);
@@ -239,9 +292,8 @@ runtimeAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
                         timestamp: new Date().toISOString()
                     } 
                 }).catch(e => console.warn('[Offscreen] Error sending ffmpegStatusOffscreen (error) message:', e.message));
-                // sendResponse({ success: false, error: error.message }); // Optional direct reply
+                // Do not use sendResponse
             });
-        return true; // Indicates async response to keep message channel open for potential sendResponse
     }
     // Standardize message type to 'runFFmpeg'
     else if (message.type === 'runFFmpeg') { 
@@ -286,27 +338,23 @@ runtimeAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     return Promise.resolve(); // Resolve if no data to write or fetch
                 }
             })
-            .then(() => {
+            .then(async () => {
                 const currentInputFileForExec = inputFileNameFromPayload || 'inputfile'; 
                 let commandArray = Array.isArray(command) ? command : command.split(' ');
 
                 // Handle special commands (get_duration, delete_file_please) or regular exec
                 if (commandArray.length === 1 && commandArray[0] === 'get_duration') {
-                    // This special command structure needs to be re-evaluated with v0.11.x
-                    // FFmpeg v0.11 doesn't typically parse duration from stderr this way directly via a simple call.
-                    // You might need to run a short FFmpeg command that outputs duration and capture it, or get it from metadata if possible.
-                    // For now, this will likely fail or return 0 if not adapted.
-                    console.warn(`[Offscreen] 'get_duration' special command needs review for FFmpeg v0.11.x compatibility.`);
-                    // A simple way to get duration is often via ffprobe-like commands, or by processing the full file if short.
-                    // This example will try to run ffmpeg -i input -f null - to get logs.
+                    // For v0.11.x, get duration using ffprobe-like command
+                    console.log(`[Offscreen] 'get_duration' special command for opId: ${operationId} using v0.11.x`);
                     let durationLogs = '';
-                    ffmpegLocalRef.on('log', ({ type, message: logMsg }) => { // Temporary log listener for duration
+                    const originalLogger = ffmpegLocalRef.setLogger;
+                    ffmpegLocalRef.setLogger(({ type, message: logMsg }) => { 
                         if (type === 'fferr') durationLogs += logMsg + '\n'; 
                     }); 
-                    return ffmpegLocalRef.run('-i', currentInputFileForExec, '-f', 'null', '-') // ffmpeg.run takes varargs
+                    return ffmpegLocalRef.run('-i', currentInputFileForExec, '-f', 'null', '-') // ffmpeg.run takes varargs for v0.11.x
                         .catch(e => console.log("[Offscreen] 'get_duration' (run -i ... -f null -) finished."))
                         .then(() => {
-                            ffmpegLocalRef.on('log', function(logEvent) { /* restore original listener if any, or clear */ }); // Restore/clear temp listener
+                            ffmpegLocalRef.setLogger(originalLogger); // Restore original logger
                             const durationMatch = durationLogs.match(/Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2,3})/);
                             let durationSeconds = 0;
                             if (durationMatch) {
@@ -322,20 +370,20 @@ runtimeAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     const fileToDelete = commandArray[1];
                     console.log(`[Offscreen] Special command: delete_file_please for opId: ${operationId} on file ${fileToDelete}`);
                     ffmpegLocalRef.FS('unlink', fileToDelete);
-                    console.log(`[Offscreen] Successfully deleted ${fileToDelete} (FS.unlink called) for opId ${operationId}`);
+                    console.log(`[Offscreen] Successfully deleted ${fileToDelete} (FS unlink called) for opId ${operationId}`);
                     return { deleted: true, fileName: fileToDelete }; 
                 } else {
-                    // Regular command execution
+                    // Regular command execution for v0.11.x
                     console.log(`[Offscreen] Executing FFmpeg command for opId: ${operationId} using input ${currentInputFileForExec}:`, commandArray.join(' '));
                     return ffmpegLocalRef.run(...commandArray).then(() => {
-                        // For v0.11, ffmpeg.run() doesn't return stdout/stderr directly.
+                        // FFmpeg v0.11.x run() doesn't return stdout/stderr directly.
                         // Output files must be read from FS.
                         console.log(`[Offscreen] FFmpeg command completed for opId: ${operationId}. Output file expected at ${outputFileName}`);
                         return null; // Indicates to proceed to readFile step for regular commands
                     }); 
                 }
             })
-            .then((execResult) => { // execResult will be {duration: ...}, {deleted:true}, or null for regular commands
+            .then(async (execResult) => { // execResult will be {duration: ...}, {deleted:true}, or null for regular commands
                 if (execResult && typeof execResult.duration === 'number') {
                     return { customData: execResult }; // Pass duration data through
                 } else if (execResult && execResult.deleted) {
@@ -344,9 +392,12 @@ runtimeAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 // Regular command execution path: read the output file
                 console.log(`[Offscreen] Reading output file: ${outputFileName} for opId: ${operationId}`);
                 const data = ffmpegLocalRef.FS('readFile', outputFileName);
-                return { data: data.buffer }; // Ensure it's an ArrayBuffer for consistency
+                // Ensure it's an ArrayBuffer for consistency. The result now includes success and fileName.
+                // FFmpeg v0.11.x FS('readFile') returns Uint8Array
+                const arrayBuffer = data instanceof ArrayBuffer ? data : data.buffer;
+                return { success: true, data: arrayBuffer, fileName: outputFileName };
             })
-            .then((result) => { // result is {data: ArrayBuffer} or {customData:{duration: ...} or {deleted: ...}}
+            .then(async (result) => { // result is {data: ArrayBuffer} or {customData:{duration: ...} or {deleted: ...}}
                 const currentInputFile = inputFileNameFromPayload || 'inputfile';
                 // Cleanup input and output files for regular operations
                 if (result.data) { // It was a regular operation, not special like get_duration
@@ -361,42 +412,34 @@ runtimeAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 }
                 return result; // Forward the result (either data or customData)
             })
-            .then((finalResult) => { 
-                if (finalResult.customData && typeof finalResult.customData.duration === 'number') {
-                    console.log(`[Offscreen] Duration command successful for opId: ${operationId}. Sending result.`);
-                    runtimeAPI.runtime.sendMessage({
-                        type: 'ffmpegResultOffscreen',
-                        payload: { operationId, success: true, duration: finalResult.customData.duration, fileName: finalResult.customData.fileName }
-                    }).catch(e => console.warn(`[Offscreen] Error sending duration success result for opId ${operationId}:`, e.message));
-                } else if (finalResult.customData && finalResult.customData.deleted) {
-                    console.log(`[Offscreen] File deletion command successful for opId: ${operationId}. File: ${finalResult.customData.fileName}`);
-                    runtimeAPI.runtime.sendMessage({
-                        type: 'ffmpegResultOffscreen',
-                        payload: { operationId, success: true, deleted: true, fileName: finalResult.customData.fileName }
-                    }).catch(e => console.warn(`[Offscreen] Error sending delete success result for opId ${operationId}:`, e.message));
-                } else if (finalResult.data) {
-                    console.log(`[Offscreen] FFmpeg command successful for opId: ${operationId}. Sending data result for ${outputFileName}.`);
-                    runtimeAPI.runtime.sendMessage({
-                        type: 'ffmpegResultOffscreen',
-                        payload: { operationId, success: true, data: finalResult.data, fileName: outputFileName }
-                    }).catch(e => console.warn(`[Offscreen] Error sending success data result for opId ${operationId}:`, e.message));
-                } else {
-                    // Should not happen if logic is correct
-                    throw new Error('FFmpeg operation yielded undefined result structure.');
-                }
-                sendResponse({ success: true });
+            .then((finalResult) => {
+                console.log(`[Offscreen] FFmpeg command successful for opId: ${operationId}. Sending response.`);
+                // Use sendResponse to return the result directly
+                sendResponse(finalResult);
             })
             .catch(e => {
                 console.error(`[Offscreen] FFmpeg run chain error for opId ${operationId}:`, e.message, e.stack);
-                runtimeAPI.runtime.sendMessage({
-                    type: 'ffmpegResultOffscreen',
-                    payload: { operationId, success: false, error: e.message, fileName: outputFileName } // outputFileName might not be relevant if error was early
-                }).catch(err => console.warn(`[Offscreen] Error sending error result for opId ${operationId}:`, err.message));
-                sendResponse({ success: false, error: e.message });
+                // Use sendResponse to return the error
+                sendResponse({
+                    success: false,
+                    error: e.message,
+                    fileName: outputFileName // outputFileName might not be relevant if error was early
+                });
             });
-        return true; // Indicates async response
+        return true; // Indicates async response - This is crucial!
     }
-    return false; // Default for unhandled messages
+    return; // Default for unhandled messages, no async response.
 });
 
-console.log('[Offscreen] Event listeners set up.'); 
+console.log('[Offscreen] Event listeners set up.');
+
+// Automatically start loading FFmpeg when the script is loaded
+(async () => {
+    console.log('[Offscreen] Auto-loading FFmpeg instance...');
+    try {
+        await getFFmpegInstance();
+        console.log('[Offscreen] FFmpeg auto-load successful.');
+    } catch (error) {
+        console.error('[Offscreen] FFmpeg auto-load failed:', error);
+    }
+})(); 

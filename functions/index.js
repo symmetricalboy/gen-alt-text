@@ -7,7 +7,7 @@ const fetch = require('node-fetch'); // Use node-fetch or native fetch in newer 
 // Good Practice: Use Build-time Environment Variables (set during deployment)
 // Simpler (but less secure than Secret Manager): Use Runtime Environment Variables
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // Will be set during deployment
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent';
 
 // --- Instructions for caption generation ---
 const captionSystemInstructions = `You are an expert captioning service. Your task is to provide accurate captions for a video by transcribing its audio content. The captions should be properly formatted as WebVTT subtitles with timestamps.

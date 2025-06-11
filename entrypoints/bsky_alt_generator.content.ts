@@ -11,6 +11,8 @@ import { defineContentScript } from '#imports';
 export default defineContentScript({
   matches: ['*://*.bsky.app/*', '*://*.deer.social/*'],
   main() {
+    console.log('[Bluesky Alt Text] Content script starting...');
+
     if (typeof window === 'undefined' || typeof document === 'undefined') {
       console.log('[bsky_alt_generator] Not a browser environment, exiting main().');
       return;
@@ -34,57 +36,71 @@ export default defineContentScript({
     let backgroundPort: chrome.runtime.Port | null = null;
     const PORT_NAME = 'content-script-port';
 
-    function connectToBackground() {
-      if (backgroundPort && backgroundPort.sender) {
-        try {
-          backgroundPort.postMessage({ type: 'ping' });
-          console.log('Background port still connected.');
-          return;
-        } catch (e) {
-          console.log('Background port error on ping, reconnecting...', e);
-          backgroundPort = null;
+    // Connect to background script with improved error handling
+    const connectToBackground = () => {
+        // First check if extension context is valid
+        if (!checkExtensionContext()) {
+            console.log('Extension context is invalid - showing reload notification');
+            showExtensionReloadNotification();
+            return;
         }
-      }
 
-      console.log('Connecting to background script...');
-      try {
-        backgroundPort = browser.runtime.connect({ name: PORT_NAME });
-
-        backgroundPort.onMessage.addListener((message: any) => {
-          console.log('[ContentScript] Received message from background:', message);
-          if (message.type === 'progress') {
-            createToast(message.message, 'info', 5000);
-          } else if (message.type === 'ffmpegStatus') {
-            // Show the standard status message
-            createToast(`FFmpeg: ${message.status}`, message.error ? 'error' : 'info', message.error ? 8000 : 4000);
+        try {
+            backgroundPort = browser.runtime.connect({ name: 'content-script-port' });
+            console.log('Connected to background script successfully');
             
-            // If there's a first load message, show it as a persistent notification
-            if (message.firstLoadMessage && message.loading) {
-              createToast(message.firstLoadMessage, 'persistent', 0); // Persistent toast that won't auto-dismiss
-            }
-          } else if (message.type === 'warning') {
-            createToast(message.message, 'warning', 7000);
-          } else if (message.type === 'error') {
-            createToast(`Error: ${message.message}`, 'error', 10000);
-            resetActiveButton();
-          }
-        });
+            backgroundPort.onMessage.addListener((message: any) => {
+                handleBackgroundMessage(message);
+            });
 
-        backgroundPort.onDisconnect.addListener(() => {
-          const lastError = chrome.runtime.lastError;
-          if (lastError) {
-            console.error('Disconnected from background script due to an error:', lastError.message);
-          } else {
-            console.error('Disconnected from background script without a specific runtime error.'); 
-          }
-          backgroundPort = null;
-          createToast('Connection to background service lost. Please reload the extension or page.', 'error', 15000);
-        });
-      } catch (e) {
-        console.error("Failed to connect to background script:", e);
-        createToast('Could not connect to background service. Extension might not work.', 'error', 10000);
-      }
-    }
+            backgroundPort.onDisconnect.addListener(() => {
+                const runtimeError = browser.runtime.lastError;
+                if (runtimeError) {
+                    console.warn('Disconnected from background script with runtime error:', runtimeError.message);
+                } else {
+                    console.log('Disconnected from background script without a specific runtime error.');
+                }
+                backgroundPort = null;
+                
+                // Check if extension context is still valid before trying to reconnect
+                if (!checkExtensionContext()) {
+                    console.log('Extension context invalidated during disconnect - showing reload notification');
+                    showExtensionReloadNotification();
+                    return;
+                }
+                
+                // Try to reconnect after a short delay
+                setTimeout(() => {
+                    if (extensionContextValid && checkExtensionContext()) {
+                        console.log('Attempting to reconnect to background script...');
+                        connectToBackground();
+                    }
+                }, 1000);
+            });
+
+            // Test the connection
+            backgroundPort.postMessage({ type: 'ping' });
+            
+        } catch (error: any) {
+            console.error('Failed to connect to background script:', error);
+            backgroundPort = null;
+            
+            // Check if it's an extension context invalidation
+            if (!checkExtensionContext() || (error.message && error.message.includes('Extension context invalidated'))) {
+                console.error('Extension context invalidated - showing reload notification');
+                showExtensionReloadNotification();
+                return;
+            }
+            
+            // For other errors, try again after a delay (but only if context is still valid)
+            setTimeout(() => {
+                if (extensionContextValid && checkExtensionContext()) {
+                    console.log('Retrying connection to background script...');
+                    connectToBackground();
+                }
+            }, 2000);
+        }
+    };
 
     connectToBackground();
 
@@ -280,6 +296,7 @@ export default defineContentScript({
 
     let activeButtonElement: HTMLButtonElement | null = null;
     let originalButtonText: string = '';
+    let extensionContextValid = true; // Track if extension context is still valid
 
     function setActiveButton(button: HTMLButtonElement, text: string = "Generating..."){
       if (activeButtonElement) resetButtonText(activeButtonElement, originalButtonText);
@@ -318,185 +335,116 @@ export default defineContentScript({
     }
 
     function addGenerateButton(textarea: HTMLTextAreaElement) {
-      console.log('[bsky_alt_generator] addGenerateButton CALLED for textarea:', textarea);
+      if (textarea.dataset.altGenButtonAdded === 'true') return;
+      textarea.dataset.altGenButtonAdded = 'true';
 
-      const buttonAttachPoint = textarea.parentElement;
-      if (!buttonAttachPoint) {
-        console.log('[bsky_alt_generator] addGenerateButton: No buttonAttachPoint (parentElement is null). Skipping for textarea:', textarea);
-        return;
-      }
-      console.log('[bsky_alt_generator] addGenerateButton: textarea.parentElement is:', buttonAttachPoint);
-
-      const existingButtonById = buttonAttachPoint.querySelector(`#${BUTTON_ID}`);
-      console.log('[bsky_alt_generator] addGenerateButton: Result of buttonAttachPoint.querySelector(#BUTTON_ID) before checks:', existingButtonById);
-
-      // Check if a button with this ID already exists in the attach point FIRST
-      if (existingButtonById) {
-         console.log('[bsky_alt_generator] addGenerateButton: Button with ID already exists in attach point (checked by querySelector). Ensuring textarea is marked and skipping.:', textarea);
-         textarea.dataset.geminiButtonAdded = 'true'; // Ensure it's marked if button found
-         return;
-      }
-
-      // Then, check the dataset attribute.
-      const datasetValue = textarea.dataset.geminiButtonAdded;
-      console.log(`[bsky_alt_generator] addGenerateButton: Value of textarea.dataset.geminiButtonAdded before check: '${datasetValue}', type: ${typeof datasetValue}`);
-      if (datasetValue === 'true') {
-        console.log('[bsky_alt_generator] addGenerateButton: Textarea already marked with geminiButtonAdded=\'true\', but no button found by ID. Skipping to avoid conflict/duplicates.:', textarea);
+      const container = findComposerContainer(textarea);
+      if (!container) {
+        console.log('[addGenerateButton] Could not find composer container for textarea:', textarea);
         return;
       }
 
-      const contextContainer = findComposerContainer(textarea);
-      if (!contextContainer) {
-        console.log('[bsky_alt_generator] addGenerateButton: No contextContainer found. Skipping for textarea:', textarea);
+      const mediaElement = findMediaElement(container);
+      if (!mediaElement) {
+        console.log('[addGenerateButton] No media element found in container.');
         return;
       }
-      console.log('[bsky_alt_generator] addGenerateButton: Found contextContainer:', contextContainer, 'for textarea:', textarea);
-      
-      let mediaSearchContainer: Element | null = contextContainer;
-      if (contextContainer.matches('[aria-label="Video settings"]')) {
-          mediaSearchContainer = document.querySelector('[data-testid="composePostView"]');
-          if (!mediaSearchContainer) {
-            console.log('[bsky_alt_generator] addGenerateButton: mediaSearchContainer (composePostView) not found for video settings context. Skipping for textarea:', textarea);
-            return; // Added return if mediaSearchContainer not found in this specific case
-          }
-      }
-      
-      console.log('[bsky_alt_generator] addGenerateButton: All checks passed, proceeding to create and add button for textarea:', textarea);
-      
+
       const button = document.createElement('button');
-      button.id = BUTTON_ID;
-      button.title = 'Generate Alt Text';
+      button.type = 'button';
+
       const icon = document.createElement('img');
-      try { icon.src = browser.runtime.getURL('/icons/gen-alt-text-white.svg'); } catch (e) { /* ignore */ }
+      try {
+        icon.src = browser.runtime.getURL('/icons/gen-alt-text-white.svg');
+      } catch (e) { /* ignore */ }
       icon.alt = 'AI';
-      Object.assign(icon.style, { width: '16px', height: '16px', marginRight: '6px' });
+      icon.style.cssText = 'width: 16px; height: 16px; margin-right: 6px; vertical-align: text-bottom;';
       button.appendChild(icon);
-      button.appendChild(document.createTextNode('Generate Alt Text'));
-      Object.assign(button.style, {
-        marginLeft: '8px', padding: '8px 16px', cursor: 'pointer', border: 'none',
-        borderRadius: '8px', backgroundColor: '#208bfe', display: 'flex',
-        alignItems: 'center', justifyContent: 'center', fontSize: '14px',
-        fontWeight: 'bold', color: 'white',
-        zIndex: '9999' // Added z-index just in case
-      });
 
-      const originalButtonTextContentForThisButton = button.innerHTML;
+      button.appendChild(document.createTextNode('Generate'));
+      
+      button.className = 'alt-text-gen-btn';
+      button.style.cssText += `
+        background-color: #208bfe;
+        color: white;
+        border: none;
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        margin-left: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        transition: all 0.2s ease;
+        white-space: nowrap;
+        position: relative;
+        z-index: 30;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      `;
 
-      button.onclick = async () => {
-        if (!backgroundPort) {
-          createToast('Not connected. Reconnecting...', 'error');
-          connectToBackground();
-          if(!backgroundPort) { createToast('Reconnect failed.', 'error'); return; }
+      button.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        // Check extension context before proceeding
+        if (!checkExtensionContext()) {
+          showExtensionReloadNotification();
+          return;
         }
-        const composer = findComposerContainer(textarea);
-        if (!composer) { createToast('Could not find context.', 'error'); return; }
-        const mediaElement = findMediaElement(mediaSearchContainer || composer);
-        if (!mediaElement) { createToast('No media found.', 'error'); return; }
-        
-        const sourceInfo = await getMediaSourceInfo(mediaElement);
-        if (!sourceInfo) return;
 
-        setActiveButton(button, 'AI Alt Text...');
-
-        let videoMeta = {};
-        if (mediaElement instanceof HTMLVideoElement) videoMeta = getVideoMetadata(mediaElement);
+        if (!backgroundPort) {
+          createToast('Not connected to background service. Please refresh the page.', 'error', 8000);
+          return;
+        }
 
         try {
-          // We no longer convert to ArrayBuffer or Base64 here.
-          // We send the URL to the background script.
-          console.log('[ContentScript] Sending media source URL for Alt Text:', sourceInfo.srcUrl);
+          setActiveButton(button);
 
-          new Promise<string>((resolve, reject) => {
-            const specificHandler = (message: any) => {
-              // Ensure message matching based on a unique identifier if possible, e.g. srcUrl if it's unique enough for this context
-              if (message.originalSrcUrl === sourceInfo.srcUrl && (message.type === 'altTextResult' || message.type === 'error')) {
-                if (backgroundPort) backgroundPort.onMessage.removeListener(specificHandler);
-                resetButtonText(button, originalButtonTextContentForThisButton);
-                if (message.error) reject(new Error(message.error));
-                else if (message.altText !== undefined) resolve(message.altText);
-                else reject(new Error('Invalid alt text response.'));
-              }
-            };
-            if (backgroundPort) backgroundPort.onMessage.addListener(specificHandler);
-            else { 
-              resetButtonText(button, originalButtonTextContentForThisButton);
-              reject(new Error('Background port not connected.')); 
-              return; 
-            }
+          const mediaInfo = await getMediaSourceInfo(mediaElement);
+          if (!mediaInfo) {
+            throw new Error('Could not get media source information');
+          }
 
-            const payloadForSendMessage = {
-                mediaSrcUrl: sourceInfo.srcUrl,
-                fileName: sourceInfo.fileName,
-                mediaType: sourceInfo.mediaType,
-                // size will be determined by background/offscreen when it fetches the URL
-                generationType: 'altText',
-                videoMetadata: videoMeta
-            };
-            
-            // Use browser.runtime.sendMessage for initial data transfer
-            browser.runtime.sendMessage({
-                type: 'processLargeMediaViaSendMessage', // New message type for sendMessage
-                payload: payloadForSendMessage
-            }).then(response => {
-                if (response && response.error) {
-                    console.error('[ContentScript] Error response from background after sendMessage:', response.error);
-                    reject(new Error(response.error));
-                    resetButtonText(button, originalButtonTextContentForThisButton);
-                } else if (response && response.success) {
-                    console.log('[ContentScript] Background acknowledged receipt via sendMessage for alt text.');
-                    // Now we wait for altTextResult via the port
-                } else {
-                    // This case might indicate an issue if no specific response format is defined
-                    console.warn('[ContentScript] Unexpected response from background after sendMessage for alt text:', response);
-                }
-            }).catch(err => {
-                console.error('[ContentScript] Error sending message to background:', err);
-                reject(err);
-                resetButtonText(button, originalButtonTextContentForThisButton);
-            });
+          const { srcUrl, mediaType, fileName } = mediaInfo;
+          console.log('[ContentScript] Sending media to background for processing:', { srcUrl: srcUrl.substring(0, 100) + '...', mediaType, fileName });
 
-            // Keep listening on the port for the actual result
-            if (backgroundPort) backgroundPort.onMessage.addListener(specificHandler);
-            else { 
-              resetButtonText(button, originalButtonTextContentForThisButton);
-              reject(new Error('Background port not connected for result listening.')); 
-              return; 
+          const videoMetadata = mediaElement instanceof HTMLVideoElement ? getVideoMetadata(mediaElement) : null;
+
+          const response = await browser.runtime.sendMessage({
+            type: 'processLargeMediaViaSendMessage',
+            payload: {
+              mediaSrcUrl: srcUrl,
+              fileName: fileName,
+              mediaType: mediaType,
+              generationType: 'altText',
+              videoMetadata: videoMetadata
             }
-            
-            // Timeout for the overall operation (waiting for port message)
-            setTimeout(() => {
-                if (backgroundPort) backgroundPort.onMessage.removeListener(specificHandler);
-                if (activeButtonElement === button && button) { // Check if this button is still the active one
-                    resetButtonText(button, originalButtonTextContentForThisButton);
-                }
-                reject(new Error('Alt text generation timed out.'));
-            }, 360000); // Increased timeout for alt text generation
-          })
-          .then(altText => {
-            textarea.value = altText;
-            textarea.dispatchEvent(new Event('input', { bubbles: true }));
-            createToast('Alt text generated!', 'success');
-          })
-          .catch(error => {
-            console.error('Error generating alt text:', error);
-            if (activeButtonElement === button) {
-               resetButtonText(button, originalButtonTextContentForThisButton);
-            }
-            createToast(error.message || 'Unknown error generating alt text', 'error');
           });
-        } catch (error) {
-            console.error('[ContentScript] Error converting file to ArrayBuffer or sending for alt text:', error);
-            createToast('Error preparing file for processing.', 'error');
-            resetButtonText(button, originalButtonTextContentForThisButton);
+
+          if (response && response.error) {
+            throw new Error(response.error);
+          }
+
+          console.log('[ContentScript] Successfully sent media to background script');
+
+        } catch (error: any) {
+          console.error('Error processing media:', error);
+          
+          // Check if it's an extension context error
+          if (!checkExtensionContext() || error.message?.includes('Extension context invalidated')) {
+            showExtensionReloadNotification();
+            return;
+          }
+          
+          createToast(error.message, 'error');
+          resetActiveButton();
         }
-      };
-      buttonAttachPoint.appendChild(button);
-      textarea.dataset.geminiButtonAdded = 'true';
-      console.log('[bsky_alt_generator] addGenerateButton: SUCCESSFULLY ADDED button for textarea:', textarea);
-      console.log('[bsky_alt_generator] addGenerateButton: Button appended. button.isConnected:', button.isConnected, 'button.offsetParent:', button.offsetParent);
-      // Check if it can be found immediately after adding
-      const buttonFoundAfterAdd = buttonAttachPoint.querySelector(`#${BUTTON_ID}`);
-      console.log('[bsky_alt_generator] addGenerateButton: Result of buttonAttachPoint.querySelector(#BUTTON_ID) immediately after add:', buttonFoundAfterAdd);
+      });
+
+      textarea.parentElement?.appendChild(button);
+      console.log('[addGenerateButton] Button added for textarea.');
     }
 
     const findCaptionSection = (): HTMLElement | null => {
@@ -710,53 +658,214 @@ export default defineContentScript({
     const observeAltTextAreas = () => {
       if (manualModeObserver) manualModeObserver.disconnect();
       console.log('[observeAltTextAreas] Starting observer...');
-      const existingTextareas = document.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR);
-      console.log(`[observeAltTextAreas] Found ${existingTextareas.length} existing textareas with selector: ${ALT_TEXT_SELECTOR}`);
-      existingTextareas.forEach(addGenerateButton);
       
-      addGenerateCaptionsButton();
-      setTimeout(addGenerateCaptionsButton, 500);
-      setTimeout(addGenerateCaptionsButton, 2000);
+      // Initial check for any textareas already on the page
+      document.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR).forEach(addGenerateButton);
 
       manualModeObserver = new MutationObserver((mutations) => {
-        let shouldCheckForCaptions = false;
         for (const mutation of mutations) {
-          if (mutation.type === 'childList') {
-            mutation.addedNodes.forEach(node => {
-              if (node instanceof HTMLElement) {
-                // Check for new dialogs that might contain caption sections
-                if (node.matches('div[role="dialog"]') || node.querySelector('div[role="dialog"]')) {
-                  console.log('[MutationObserver] Dialog added or content changed, re-checking for caption button.');
-                  shouldCheckForCaptions = true;
-                }
+          if (mutation.type !== 'childList') continue;
 
-                if (node.matches(ALT_TEXT_SELECTOR)) {
-                  console.log('[MutationObserver] Matched ALT_TEXT_SELECTOR on added node:', node);
-                  addGenerateButton(node as HTMLTextAreaElement);
-                }
-                const childTextareas = node.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR);
-                if (childTextareas.length > 0) {
-                  console.log(`[MutationObserver] Found ${childTextareas.length} child textareas with selector: ${ALT_TEXT_SELECTOR}`);
-                  childTextareas.forEach(addGenerateButton);
-                }
+          for (const node of mutation.addedNodes) {
+            if (node.nodeType === Node.ELEMENT_NODE) {
+              const element = node as HTMLElement;
+
+              // 1. Look for alt text textareas being added
+              if (element.matches(ALT_TEXT_SELECTOR)) {
+                addGenerateButton(element as HTMLTextAreaElement);
               }
-            });
+              element.querySelectorAll<HTMLTextAreaElement>(ALT_TEXT_SELECTOR).forEach(addGenerateButton);
+
+              // 2. Look for video elements to trigger a check for the caption button
+              if (element.querySelector('video') || element.matches('video')) {
+                 console.log('[MutationObserver] Video element detected. Checking for caption section soon.');
+                 // The dialog for captions might take a moment to appear after the video.
+                 setTimeout(addGenerateCaptionsButton, 500);
+              }
+            }
           }
-          // Also consider if the mutation itself might be relevant to caption sections,
-          // e.g. attributes changing on a dialog.
-          if (mutation.type === 'attributes' && mutation.target instanceof HTMLElement && mutation.target.matches('div[role="dialog"]')) {
-            console.log('[MutationObserver] Attributes changed on a dialog, re-checking for caption button.');
-            shouldCheckForCaptions = true;
-          }
-        }
-        if (shouldCheckForCaptions) {
-          addGenerateCaptionsButton();
         }
       });
 
-      manualModeObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'aria-label', 'class'] });
+      manualModeObserver.observe(document.body, { childList: true, subtree: true });
     };
 
+    // Start observing immediately when content script loads
     observeAltTextAreas();
+
+    // Handle messages from background script
+    const handleBackgroundMessage = (message: any) => {
+      try {
+        console.log('[ContentScript] Received message from background:', message);
+        
+        if (message.type === 'progress') {
+          createToast(message.message, 'info', 5000);
+        } else if (message.type === 'ffmpegStatus') {
+          createToast(`FFmpeg: ${message.status}`, message.error ? 'error' : 'info', message.error ? 8000 : 4000);
+          
+          if (message.firstLoadMessage && message.loading) {
+            createToast(message.firstLoadMessage, 'persistent', 0);
+          }
+          
+          if (message.error && message.status && message.status.includes('timed out')) {
+            createToast('Note: Simple images and GIFs can still be processed without FFmpeg!', 'info', 6000);
+          }
+        } else if (message.type === 'warning') {
+          createToast(message.message, 'warning', 7000);
+        } else if (message.type === 'error') {
+          createToast(`Error: ${message.message}`, 'error', 10000);
+          resetActiveButton();
+        } else if (message.type === 'altTextResult') {
+          handleAltTextResult(message);
+        } else if (message.type === 'captionResult') {
+          handleCaptionResult(message);
+        } else if (message.type === 'pong') {
+          console.log('Received pong from background script - connection is healthy');
+        } else {
+          console.log('Received unhandled message type:', message.type);
+        }
+      } catch (error: any) {
+        console.error('Error in handleBackgroundMessage:', error);
+        if (error.message && error.message.includes('activeButton')) {
+          console.warn('activeButton reference error - likely due to scope issue');
+        }
+      }
+    };
+
+    const findRelatedTextarea = (button: HTMLButtonElement): HTMLTextAreaElement | null => {
+      const parent = button.parentElement;
+      if (parent) {
+        return parent.querySelector('textarea');
+      }
+      return null;
+    };
+
+    // Handle alt text result from background script
+    const handleAltTextResult = (message: any) => {
+        if (message.altText && activeButtonElement) {
+            const textarea = findRelatedTextarea(activeButtonElement);
+            if (textarea) {
+                textarea.value = message.altText;
+                textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                createToast('Alt text generated successfully!', 'success', 3000);
+            }
+        }
+        resetActiveButton();
+    };
+
+    // Handle caption result from background script  
+    const handleCaptionResult = (message: any) => {
+        if (message.vttResults && message.vttResults.length > 0) {
+            const vttContent = message.vttResults[0].vttContent;
+            if (vttContent && activeButtonElement) {
+                const textarea = findRelatedTextarea(activeButtonElement);
+                if (textarea) {
+                    // Extract text content from VTT for use as alt text/captions
+                    const textContent = extractTextFromVTT(vttContent);
+                    textarea.value = textContent;
+                    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                    createToast('Captions generated and converted to text!', 'success', 3000);
+                }
+            }
+        }
+        resetActiveButton();
+    };
+
+    // Extract readable text from VTT content
+    const extractTextFromVTT = (vttContent: string): string => {
+        const lines = vttContent.split('\n');
+        const textLines: string[] = [];
+        
+        for (const line of lines) {
+            // Skip VTT headers, timestamps, and empty lines
+            if (line.includes('WEBVTT') || line.includes('-->') || line.trim() === '' || line.match(/^\d/)) {
+                continue;
+            }
+            // Clean up any HTML tags and add to text
+            const cleanLine = line.replace(/<[^>]*>/g, '').trim();
+            if (cleanLine) {
+                textLines.push(cleanLine);
+            }
+        }
+        
+        return textLines.join(' ');
+    };
+
+    // Check if extension context is still valid
+    function checkExtensionContext(): boolean {
+      try {
+        return !!browser.runtime.id;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    // Show persistent notification about extension reload
+    function showExtensionReloadNotification() {
+      extensionContextValid = false;
+      
+      // Create a prominent, persistent notification
+      const notification = document.createElement('div');
+      notification.id = 'bsky-extension-reload-notice';
+      notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: #1d4ed8;
+        color: white;
+        padding: 16px 20px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        z-index: 999999;
+        font-family: system-ui, -apple-system, sans-serif;
+        font-size: 14px;
+        max-width: 350px;
+        border: 2px solid #3b82f6;
+      `;
+      
+      notification.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div style="font-size: 20px;">🔄</div>
+          <div>
+            <div style="font-weight: 600; margin-bottom: 4px;">Extension Updated</div>
+            <div style="opacity: 0.9; font-size: 13px; margin-bottom: 8px;">
+              Bluesky Alt Text Generator has been updated. Please refresh this page to continue using the extension.
+            </div>
+            <button id="refresh-page-btn" style="
+              background: white; 
+              color: #1d4ed8; 
+              border: none; 
+              padding: 6px 12px; 
+              border-radius: 4px; 
+              font-weight: 500; 
+              cursor: pointer;
+              font-size: 12px;
+            ">Refresh Page</button>
+          </div>
+        </div>
+      `;
+      
+      // Remove any existing notification
+      const existing = document.getElementById('bsky-extension-reload-notice');
+      if (existing) existing.remove();
+      
+      document.body.appendChild(notification);
+      
+      // Add click handler for refresh button
+      const refreshBtn = notification.querySelector('#refresh-page-btn');
+      if (refreshBtn) {
+        refreshBtn.addEventListener('click', () => {
+          window.location.reload();
+        });
+      }
+      
+      // Auto-remove after 30 seconds and show a toast instead
+      setTimeout(() => {
+        if (notification.parentNode) {
+          notification.remove();
+          createToast('Extension updated - please refresh the page to restore functionality', 'persistent', 0);
+        }
+      }, 30000);
+    }
   }
 });

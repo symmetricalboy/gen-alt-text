@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>FFmpeg Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        .log {
+            background: #f0f0f0;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .error {
+            background: #ffcccc;
+            color: #cc0000;
+        }
+        .success {
+            background: #ccffcc;
+            color: #008800;
+        }
+        .warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        .status {
+            font-weight: bold;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>FFmpeg.wasm Test (Offscreen)</h1>
+    <p>This page tests if FFmpeg can load correctly via the offscreen document in your Chrome extension environment.</p>
+    
+    <div class="status" id="status">Ready to test</div>
+    
+    <button id="test-btn">Test FFmpeg Loading</button>
+    <button id="clear-btn">Clear Logs</button>
+    
+    <div id="logs"></div>
+
+    <script src="test-ffmpeg-offscreen.js"></script>
+</body>
+</html> 

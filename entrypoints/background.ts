@@ -131,6 +131,7 @@ const SINGLE_FILE_DIRECT_LIMIT = 19 * 1024 * 1024; // 19MB
 const MAX_CHUNKS = 15; 
 
 let contentScriptPort: any = null; // Changed to any to avoid type errors
+let ffmpegReady = false; // Track if FFmpeg is loaded
 
 // Helper function to convert Base64 to ArrayBuffer
 function base64ToArrayBuffer(base64: string): ArrayBuffer {
@@ -169,6 +170,13 @@ interface FFmpegDeleteResult extends FFmpegSuccessResultBase {
 }
 
 type FFmpegResolvedOperationOutput = FFmpegDataResult | FFmpegDurationResult | FFmpegDeleteResult;
+
+// --- FFmpeg Input type definition ---
+interface FFmpegInput {
+    srcUrl: string;
+    mediaType: string;
+    fileName: string;
+}
 
 // --- Other type definitions ---
 
@@ -237,9 +245,9 @@ interface RequestPayload {
 
 
 // --- Offscreen Document Logic ---
-const OFFSCRREN_DOCUMENT_PATH = 'offscreen.html'; // Removed leading slash
+const OFFSCREEN_DOCUMENT_PATH = 'offscreen.html'; // Removed leading slash
 
-const ffmpegOperations = new Map<number, { resolve: (value: FFmpegResolvedOperationOutput) => void, reject: (reason?: any) => void }>();
+let ffmpegOperations = new Map<number, { resolve: (value?: any) => void; reject: (reason?: any) => void }>();
 let operationIdCounter = 0;
 
 async function hasOffscreenDocument(): Promise<boolean> {
@@ -255,374 +263,132 @@ async function hasOffscreenDocument(): Promise<boolean> {
     // Use any to bypass type checking for getContexts
     const contexts: any[] = await (browser.runtime as any).getContexts({
         contextTypes: [(browser.runtime as any).ContextType.OFFSCREEN_DOCUMENT],
-        documentUrls: [browser.runtime.getURL(OFFSCRREN_DOCUMENT_PATH)]
+        documentUrls: [browser.runtime.getURL(OFFSCREEN_DOCUMENT_PATH)]
     });
     return contexts ? contexts.length > 0 : false;
 }
 
-async function setupOffscreenDocument(): Promise<boolean> {
-    const docExists = await hasOffscreenDocument();
-    if (!docExists) {
-        console.log('[Background] Creating offscreen document...');
-        // Use any to bypass type checking for createDocument
-        await (browser as any).offscreen.createDocument({
-            url: OFFSCRREN_DOCUMENT_PATH,
-            reasons: [(browser as any).offscreen.Reason.BLOBS, (browser as any).offscreen.Reason.USER_MEDIA],
-            justification: 'FFmpeg processing for media files.',
-        });
-        console.log('[Background] Offscreen document requested for creation.');
-        return new Promise((resolve, reject) => {
+// Helper function to check if offscreen document is active
+async function offscreenDocumentIsActive(): Promise<boolean> {
+    return await hasOffscreenDocument();
+}
+
+async function setupOffscreenDocument(path: string) {
+    try {
+        const docExists = await hasOffscreenDocument();
+        if (!docExists) {
+            console.log('[Background] Creating offscreen document...');
+            // Use any to bypass type checking for createDocument
+            await (browser as any).offscreen.createDocument({
+                url: OFFSCREEN_DOCUMENT_PATH,
+                reasons: [(browser as any).offscreen.Reason.BLOBS, (browser as any).offscreen.Reason.USER_MEDIA],
+                justification: 'FFmpeg processing for media files.',
+            });
+            console.log('[Background] Offscreen document requested for creation.');
+        } else {
+            console.log('[Background] Offscreen document already exists. Assuming FFmpeg ready or will be handled.');
+            // Potentially verify readiness or re-trigger load if necessary, but for now assume ready
+            return; 
+        }
+
+        // Wait for the offscreen document to be created
+        await new Promise<void>(resolve => {
             const timeoutId = setTimeout(() => {
-                console.error('[Background] Timeout waiting for offscreen FFmpeg to load.');
+                console.warn('[Background] Timeout waiting for offscreen document to load FFmpeg.');
                 browser.runtime.onMessage.removeListener(initialLoadListener);
-                reject(new Error('Timeout waiting for offscreen FFmpeg to load.'));
-            }, 300000); // 5 minutes timeout
-
+                ffmpegReady = false; // Ensure this is false on timeout
+                resolve();
+            }, 300000); // 5 minute timeout to match offscreen handler
+            
             const initialLoadListener = (message: any, sender: any) => {
-                // Ensure the message is from our offscreen document
-                if (sender.url && sender.url.endsWith(OFFSCRREN_DOCUMENT_PATH) && message.type === 'ffmpegStatusOffscreen') {
-                    console.log('[Background] Received ffmpegStatusOffscreen:', message.payload);
-
-                    if (message.payload) {
-                        // Case 1: Offscreen reports its scripts (including handler) are loaded
-                        if (message.payload.progress === 'scripts-loaded') {
-                            console.log('[Background] Offscreen scripts loaded. Sending loadFFmpegOffscreen command.');
-                            browser.runtime.sendMessage({ target: 'offscreen-ffmpeg', type: 'loadFFmpegOffscreen' })
-                                .catch((err: Error) => { 
-                                    console.error('[Background] Error sending loadFFmpegOffscreen message after scripts loaded:', err.message);
-                                    clearTimeout(timeoutId);
-                                    browser.runtime.onMessage.removeListener(initialLoadListener);
-                                    reject(new Error(`Failed to send loadFFmpegOffscreen message: ${err.message}`));
-                                });
-                            // Keep listening for the 'complete' or 'error' status for FFmpeg itself
-                            return false; // Indicate message handled, but promise not yet resolved
-                        }
-                        // Case 2: FFmpeg fully loaded and ready in offscreen
-                        // The 'FFmpeg loaded in offscreen document.' status is sent by offscreen-ffmpeg-handler.js
-                        // when its getFFmpegInstance() resolves successfully upon 'loadFFmpegOffscreen' message.
-                        else if (message.payload.progress === 'complete' && message.payload.status === 'FFmpeg loaded in offscreen document.') {
-                            clearTimeout(timeoutId);
-                            browser.runtime.onMessage.removeListener(initialLoadListener);
-                            console.log('[Background] Confirmed: FFmpeg loaded successfully in offscreen document.');
-                            resolve(true);
-                            return true; // Indicate message handled and promise resolved
-                        }
-                        // Case 3: An error occurred during loading in offscreen
-                        else if (message.payload.progress === 'error') {
-                            clearTimeout(timeoutId);
-                            browser.runtime.onMessage.removeListener(initialLoadListener);
-                            const errorMsg = message.payload.error || 'Unknown error during offscreen FFmpeg loading.';
-                            console.error('[Background] Offscreen document reported FFmpeg load error:', errorMsg);
-                            reject(new Error('Offscreen FFmpeg load failed: ' + errorMsg));
-                            return true; // Indicate message handled and promise resolved (rejected)
-                        }
-                        // Other progress messages (e.g., 'start', 'ongoing') can be logged but don't resolve/reject yet
-                        else if (message.payload.status) {
-                             console.log(`[Background] FFmpeg loading progress: ${message.payload.status} at ${message.payload.timestamp || new Date().toISOString()}`);
-                        }
+                if (sender.url && sender.url.endsWith(OFFSCREEN_DOCUMENT_PATH) && message.type === 'ffmpegStatusOffscreen') {
+                    if (message.payload?.progress === 'scripts-loaded') {
+                        console.log('[Background] Offscreen scripts loaded. The offscreen script will now load FFmpeg automatically.');
+                    } else if (message.payload?.progress === 'complete') {
+                        console.log('[Background] Offscreen reports FFmpeg is loaded and ready.');
+                        ffmpegReady = true;
+                        browser.runtime.onMessage.removeListener(initialLoadListener);
+                        clearTimeout(timeoutId);
+                        resolve();
+                    } else if (message.payload?.progress === 'error') {
+                        console.error('[Background] Offscreen reports FFmpeg load failed:', message.payload.error);
+                        browser.runtime.onMessage.removeListener(initialLoadListener);
+                        clearTimeout(timeoutId);
+                        resolve(); // Resolve anyway to not block, but ffmpegReady is false
                     }
                 }
-                return false; // Return false if the message is not handled or to continue listening
             };
             browser.runtime.onMessage.addListener(initialLoadListener);
-
-            // The loadFFmpegOffscreen message is now sent when 'scripts-loaded' is received.
-            // No initial message send from here.
-            console.log('[Background] Waiting for offscreen document to signal script readiness...');
         });
-    } else {
-        console.log('[Background] Offscreen document already exists. Assuming FFmpeg ready or will be handled.');
-        // Potentially verify readiness or re-trigger load if necessary, but for now assume ready
-        return true; 
+    } catch (error) {
+        console.error('[Background] Error setting up offscreen document:', error);
     }
 }
 
-// Unified listener for all runtime messages
-browser.runtime.onMessage.addListener((message: any, sender: any, sendResponse: (response?: any) => void): true => {
-    // 1. Handle messages from the Offscreen Document
-    if (sender.url && sender.url.endsWith(OFFSCRREN_DOCUMENT_PATH)) {
-        if (message.type === 'ffmpegLogOffscreen') {
-            const { type, message: logMessage } = message.payload;
-            if (contentScriptPort) {
-                contentScriptPort.postMessage({ type: 'ffmpegLog', message: '[FFMPEG Offscreen ' + type + '] ' + logMessage });
-            }
-        } else if (message.type === 'ffmpegResultOffscreen') {
-            console.log('[Background] Received ffmpegResultOffscreen:', message.payload);
-            const { operationId, success, data, duration, deleted, error, fileName } = message.payload;
-            if (ffmpegOperations.has(operationId)) {
-                const operation = ffmpegOperations.get(operationId)!;
-                if (success) {
-                    let resultPayload: FFmpegResolvedOperationOutput;
-                    if (typeof duration === 'number') {
-                        resultPayload = { success: true, fileName, duration };
-                    } else if (data instanceof ArrayBuffer || (typeof data === 'object' && data && typeof data.byteLength === 'number')) { 
-                        resultPayload = { success: true, fileName, data: data as ArrayBuffer };
-                    } else if (deleted === true) {
-                        resultPayload = { success: true, fileName, deleted };
-                    } else {
-                        operation.reject(new Error('Unknown successful FFmpeg result structure from offscreen.'));
-                        ffmpegOperations.delete(operationId);
-                        return true;
-                    }
-                    operation.resolve(resultPayload);
-                } else {
-                    operation.reject(new Error(error || 'Unknown FFmpeg offscreen error.'));
-                }
-                ffmpegOperations.delete(operationId);
-            } else {
-                console.warn("[Background] Unknown operationId received for ffmpegResultOffscreen.");
-            }
-        } else if (message.type === 'ffmpegStatusOffscreen') {
-            if (message.payload && message.payload.status === 'FFmpeg loaded in offscreen document.') {
-                console.log('[Background] General listener caught FFmpeg loaded confirmation from offscreen.');
-                // This might be part of the setupOffscreenDocument promise chain, no sendResponse here.
-            } else if (message.payload && message.payload.progress) {
-                // Handle progress messages 
-                const { progress, status, timestamp } = message.payload;
-                console.log(`[Background] FFmpeg loading progress: ${status}${timestamp ? ` at ${timestamp}` : ''}`);
-                
-                // Forward progress to content script if connected
-                if (contentScriptPort) {
-                    contentScriptPort.postMessage({ 
-                        type: 'ffmpegStatus', 
-                        status: status,
-                        loading: progress !== 'complete',
-                        firstLoadMessage: progress === 'start' || progress === 'ongoing' 
-                            ? 'FFmpeg is loading. The first load can take up to 5 minutes. Future loads will be faster.'
-                            : undefined
-                    });
-                }
-            }
-            return true;
-        }
-        return true;
+// Re-implement runFFmpegInOffscreen to be simpler
+async function runFFmpegInOffscreen(operationName: string, command: string | string[], input: FFmpegInput, outputFileName: string): Promise<any> {
+    console.log(`[runFFmpegInOffscreen] Operation: ${operationName}. Input:`, input);
+
+    if (!(await offscreenDocumentIsActive())) {
+        await setupOffscreenDocument(OFFSCREEN_DOCUMENT_PATH);
     }
     
-    // 2. Handle messages from Content Scripts (e.g., initial data transfer)
-    if (message.type === 'processLargeMediaViaSendMessage') {
-        console.log('[Background] Received processLargeMediaViaSendMessage with payload:', message.payload);
-
-        const { mediaSrcUrl, fileName, mediaType, generationType, videoMetadata } = message.payload;
-
-        if (typeof mediaSrcUrl !== 'string' || mediaSrcUrl.length === 0) {
-            console.error('[Background] Invalid mediaSrcUrl received via sendMessage:', mediaSrcUrl);
-            sendResponse({ error: 'Invalid mediaSrcUrl received by background script.' });
-            return true;
-        }
-        if (typeof fileName !== 'string' || fileName.length === 0) {
-            console.error('[Background] Invalid fileName received via sendMessage:', fileName);
-            sendResponse({ error: 'Invalid fileName received by background script.' });
-            return true;
-        }
-        if (typeof mediaType !== 'string' || mediaType.length === 0) {
-            console.error('[Background] Invalid mediaType received via sendMessage:', mediaType);
-            sendResponse({ error: 'Invalid mediaType received by background script.' });
-            return true;
-        }
-
-        // We are not storing anything in IDB here anymore from this message.
-        // We directly call the processing logic, which will handle fetching/FFmpeg via offscreen.
-        sendResponse({ success: true, message: 'Background received media source URL for processing.' });
-
-        if (contentScriptPort) {
-            // Rename ProcessLargeMediaFromIndexedDBPayload or create a new suitable interface if structure differs significantly
-            // For now, let's adapt its call, assuming processMediaWithFFmpegAndCloud will be adapted or a new orchestrator created
-            // The main change is that `file` (Blob/File) is replaced by `mediaSrcUrl` and `mediaType`.
-            // `processMediaWithFFmpegAndCloud` will need to be updated to fetch from URL if it's for FFmpeg.
-            
-            // Directly call the main processing function. It needs to be adapted to take srcUrl.
-            processMediaWithUrl(
-                mediaSrcUrl,
-                fileName,
-                mediaType,
-                generationType,
-                contentScriptPort,
-                videoMetadata
-            ).catch((err: Error) => {
-                console.error('[Background] Error after triggering processMediaWithUrl:', err.message);
-                // Errors from processMediaWithUrl should be posted to contentScriptPort from within that function
-            });
-        } else {
-            console.error('[Background] No active content script port to send results to after receiving media source URL.');
-            // No IDB key to clean up here if we didn't store one
+    // Check if FFmpeg is ready
+    if (!ffmpegReady) {
+        console.log('[runFFmpegInOffscreen] FFmpeg not ready yet, waiting for it to load...');
+        // If FFmpeg is not ready, we need to wait for it
+        // This could happen if a request comes in while FFmpeg is still loading
+        const maxWaitTime = 300000; // 5 minutes
+        const startTime = Date.now();
+        
+        while (!ffmpegReady && (Date.now() - startTime) < maxWaitTime) {
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Check every second
         }
         
-        return true; // Asynchronous response (sendResponse called above), and further processing is async.
+        if (!ffmpegReady) {
+            throw new Error('FFmpeg failed to load after 5 minutes');
+        }
     }
     
-    console.log('[Background] Message not handled by primary listener:', message.type);
-    return false as any;
-});
-
-// Remove deprecated Chrome API usage - now using webextension-polyfill
-
-// ... (Rest of the file: runFFmpegInOffscreen, getMediaDurationViaFFmpeg, etc. ...)
-// ... (handleProcessLargeMediaFromIndexedDB, processMediaWithFFmpegAndCloud) ...
-
-// WXT entry point
-export default {
-    main() {
-        console.log('[Background] Service worker main() executed. Setting up listeners.');
-
-        // Start loading FFmpeg right away when the extension starts
-        console.log('[Background] Preloading FFmpeg on browser start...');
-        setupOffscreenDocument().catch((err: Error) => {
-            console.warn("[Background] Initial FFmpeg preloading failed:", err.message);
-        });
-
-        // Listener for long-lived port connections from content scripts
-        browser.runtime.onConnect.addListener((port: any) => {
-            if (port.name === 'content-script-port') {
-                if (contentScriptPort && contentScriptPort !== port) {
-                    console.log('[Background] New content script connection, previous port will be replaced.');
-                }
-                contentScriptPort = port;
-                console.log('[Background] Content script connected via port:', port.sender?.tab?.id ? `Tab ID ${port.sender.tab.id}` : 'Unknown tab');
-
-                // When a port connects, let it know if FFmpeg is still loading
-                setupOffscreenDocument().catch((err: Error) => {
-                    console.warn("[Background] Initial Offscreen Document setup/FFmpeg load failed on connect:", err.message);
-                    if (contentScriptPort && contentScriptPort === port) { 
-                        contentScriptPort.postMessage({ 
-                            type: 'ffmpegStatus', 
-                            status: 'FFmpeg initial setup error: ' + err.message, 
-                            error: true,
-                            firstLoadMessage: 'FFmpeg is loading. The first load can take up to 5 minutes. Future loads will be faster.'
-                        });
-                    }
-                });
-
-                port.onMessage.addListener(async (message: any) => { 
-                    let payloadSummary = "No payload or unrecognized structure";
-                    if (message.payload) {
-                        if (message.payload.indexedDbKey) {
-                             payloadSummary = `{indexedDbKey: ${message.payload.indexedDbKey}, name: ${message.payload.name}, type: ${message.payload.type}}`;
-                        } else if (message.payload.arrayBuffer instanceof ArrayBuffer) {
-                            payloadSummary = `{name: ${message.payload.name}, arrayBuffer: ArrayBuffer(size=${message.payload.arrayBuffer.byteLength})}`;
-                        } else if (message.payload.arrayBuffer) {
-                             payloadSummary = `{name: ${message.payload.name}, arrayBuffer: Non-ArrayBuffer type: ${typeof message.payload.arrayBuffer}}`;
-                        } else {
-                            payloadSummary = JSON.stringify(message.payload).substring(0, 200) + "...";
-                        }
-                    }
-                    console.log('[Background] Port message from content script:', message.type, payloadSummary);
-
-                    if (message.type === 'ping') {
-                        port.postMessage({ type: 'pong' });
-                    }
-                });
-
-                port.onDisconnect.addListener(() => {
-                    console.log('[Background] Content script port disconnected:', port.sender?.tab?.id ? `Tab ID ${port.sender.tab.id}` : 'Unknown tab');
-                    if (contentScriptPort === port) { 
-                        contentScriptPort = null;
-                        console.log('[Background] Active content script port cleared.');
-                    }
-                });
-            }
-        });
-        console.log('[Background] onConnect listener attached.');
-    },
-};
-
-console.log('[Background] Background script loaded (listeners will be set up in main when service worker executes).');
-
-// Placeholder function definitions
-async function runFFmpegInOffscreen(mediaInput: {srcUrl: string, mediaType: string, fileName: string} | {fileBlob: File | Blob, fileName: string}, commandArgs: string[], operationName: string): Promise<FFmpegResolvedOperationOutput> {
-    // const fileName = (file instanceof File && file.name) ? file.name : 'input_blob';
-    // console.log(`[runFFmpegInOffscreen] Placeholder for ${operationName} with file ${fileName}`);
-    console.log(`[runFFmpegInOffscreen] Operation: ${operationName}. Input:`, mediaInput);
-
+    // Send the command and wait for a direct response.
     try {
-        // Make sure we properly await the setupOffscreenDocument promise
-        const offscreenReady = await setupOffscreenDocument();
-        if (!offscreenReady) {
-            throw new Error(`Failed to ensure offscreen document is ready. Cannot run FFmpeg operation ${operationName}.`);
-        }
-        console.log(`[runFFmpegInOffscreen] Offscreen document is ready for operation: ${operationName}`);
-    } catch (error: any) {
-        console.error(`[runFFmpegInOffscreen] Error setting up offscreen document: ${error.message}`);
-        throw error;
-    }
-
-    operationIdCounter++;
-    const currentOperationId = operationIdCounter;
-
-    // Pre-fetch blob URLs to convert them to ArrayBuffer directly
-    // Offscreen document often can't access blob URLs from other contexts
-    let ffmpegPayloadInputPart: any;
-    let logFileName: string;
-
-    if ('srcUrl' in mediaInput) {
-        logFileName = mediaInput.fileName;
-        
-        // Check if it's a blob URL and fetch it if necessary
-        if (mediaInput.srcUrl.startsWith('blob:') || mediaInput.srcUrl.startsWith('data:')) {
-            console.log(`[runFFmpegInOffscreen] Detected blob or data URL. Fetching content in background script for ${operationName}...`);
-            try {
-                const response = await fetch(mediaInput.srcUrl);
-                if (!response.ok) {
-                    throw new Error(`Failed to fetch from blob/data URL: ${response.status} ${response.statusText}`);
-                }
-                const arrayBuffer = await response.arrayBuffer();
-                console.log(`[runFFmpegInOffscreen] Successfully fetched ${arrayBuffer.byteLength} bytes from blob/data URL`);
-                
-                // Pass the file data directly instead of the URL
-                ffmpegPayloadInputPart = { 
-                    fileData: arrayBuffer, 
-                    mediaType: mediaInput.mediaType, 
-                    fileName: mediaInput.fileName 
-                };
-            } catch (fetchError: any) {
-                console.error(`[runFFmpegInOffscreen] Error fetching blob/data URL: ${fetchError.message}`);
-                throw new Error(`Failed to fetch blob/data URL content: ${fetchError.message}`);
-            }
-        } else {
-            // Regular URL - let offscreen handler handle it
-            ffmpegPayloadInputPart = { 
-                srcUrl: mediaInput.srcUrl, 
-                mediaType: mediaInput.mediaType, 
-                fileName: mediaInput.fileName 
-            };
-        }
-    } else {
-        // Direct file blob
-        ffmpegPayloadInputPart = { file: mediaInput.fileBlob, fileName: mediaInput.fileName }; 
-        logFileName = mediaInput.fileName;
-    }
-
-    return new Promise((resolve, reject) => {
-        ffmpegOperations.set(currentOperationId, { resolve, reject });
-
-        const outputFileNameBase = logFileName.includes('.') ? logFileName.substring(0, logFileName.lastIndexOf('.')) : logFileName;
-        const finalOutputFileName = commandArgs.includes('-f') && commandArgs.includes('vtt')
-            ? outputFileNameBase + '.vtt' 
-            : outputFileNameBase + '.processed';
-
-        const messagePayload = {
+        const response = await browser.runtime.sendMessage({
             target: 'offscreen-ffmpeg',
             type: 'runFFmpeg',
             payload: {
-                operationId: currentOperationId,
-                ...ffmpegPayloadInputPart, // Contains fileData/mediaType/fileName OR srcUrl/mediaType/fileName OR file/fileName
-                // fileName and outputFileName are now set based on mediaInput and commandArgs
-                outputFileName: finalOutputFileName, // This was already being constructed
-                command: commandArgs.join(' ')
+                operationId: ++operationIdCounter, // Keep for logging on offscreen side
+                command,
+                ...input,
+                outputFileName
             }
-        };
-        console.log('[Background] Sending runFFmpeg message to offscreen:', messagePayload);
-        browser.runtime.sendMessage(messagePayload)
-            .catch(err => {
-                console.error(`[Background] Error sending FFmpeg command to offscreen for ${operationName}:`, err);
-                ffmpegOperations.delete(currentOperationId);
-                reject(new Error(`Failed to send command to offscreen: ${err.message}`));
-            });
-    });
+        });
+
+        if (response) {
+            if (response.success) {
+                console.log(`[runFFmpegInOffscreen] FFmpeg operation ${operationName} successful.`);
+                return response; // The response object is now the result, e.g., { success: true, data, fileName }
+            } else {
+                throw new Error(response.error || `Unknown FFmpeg error for ${operationName}.`);
+            }
+        } else {
+            // This can happen if the offscreen document is closed unexpectedly.
+            throw new Error('No response from offscreen document.');
+        }
+    } catch (err: any) {
+        console.error(`[runFFmpegInOffscreen] Error during FFmpeg operation '${operationName}':`, err);
+        // Re-throw the error to be caught by the caller (e.g., processMediaWithUrl)
+        throw new Error(`Failed to execute FFmpeg command for ${operationName}: ${err.message}`);
+    }
 }
 
 async function getMediaDurationViaFFmpeg(mediaSrcUrl: string, mediaType: string, fileName: string): Promise<number> {
     console.log('[getMediaDurationViaFFmpeg] for URL:', mediaSrcUrl);
-    const result = await runFFmpegInOffscreen({srcUrl: mediaSrcUrl, mediaType, fileName}, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', fileName], 'getDuration');
+    const result = await runFFmpegInOffscreen(
+        'getDuration',
+        ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', fileName],
+        {srcUrl: mediaSrcUrl, mediaType, fileName},
+        'duration.txt'
+    );
     if (result.success && typeof result.duration === 'number') {
         return result.duration;
     }
@@ -652,7 +418,12 @@ async function processMediaWithUrl(
         const isGeneratingCaptions = generationType === 'captions';
 
         if (isGeneratingCaptions) {
-            const vttResult = await runFFmpegInOffscreen({srcUrl: mediaSrcUrl, mediaType, fileName}, ['-i', fileName, '-an', '-vn', '-scodec', 'webvtt', '-f', 'vtt', 'output.vtt'], 'generateVTT');
+            const vttResult = await runFFmpegInOffscreen(
+                'generateVTT',
+                ['-i', fileName, '-an', '-vn', '-scodec', 'webvtt', '-f', 'vtt', 'output.vtt'],
+                {srcUrl: mediaSrcUrl, mediaType, fileName},
+                'output.vtt'
+            );
             if (vttResult.success && vttResult.data) {
                 const vttContent = new TextDecoder().decode(vttResult.data);
                 port.postMessage({ type: 'captionResult', vttResults: [{fileName: vttResult.fileName || fileName + '.vtt', vttContent }], originalSrcUrl: mediaSrcUrl });
@@ -666,35 +437,59 @@ async function processMediaWithUrl(
 
             let dataForCloud: { base64Data: string; mimeType: string; fileSize: number; };
 
-            if (mediaType.startsWith('video/') || mediaType === 'image/gif') { // Needs FFmpeg processing for a still frame for alt text
+            // Check if this is a GIF or other simple media that can be sent directly to cloud
+            const isSimpleMedia = mediaType === 'image/gif' || mediaType.startsWith('image/');
+            
+            if ((mediaType.startsWith('video/') || mediaType === 'image/gif') && !isSimpleMedia) { 
+                // Complex video processing - needs FFmpeg for frame extraction
                 port.postMessage({ type: 'progress', message: `Extracting frame from ${fileName} for alt text...`, originalSrcUrl: mediaSrcUrl });
-                // Example: extract first frame as JPEG
-                const frameResult = await runFFmpegInOffscreen(
-                    { srcUrl: mediaSrcUrl, mediaType, fileName }, 
-                    ['-i', fileName, '-vf', 'select=eq(n\,0)', '-q:v', '3', 'frame.jpg', '-f', 'image2'], 
-                    'extractFrame'
-                );
-                if (frameResult.success && frameResult.data) {
-                    const imageBase64 = uint8ArrayToBase64(new Uint8Array(frameResult.data)); // Helper needed
+                try {
+                    const frameResult = await runFFmpegInOffscreen(
+                        'extractFrame',
+                        ['-i', fileName, '-vf', 'select=eq(n\,0)', '-q:v', '3', 'frame.jpg', '-f', 'image2'],
+                        { srcUrl: mediaSrcUrl, mediaType, fileName },
+                        'frame.jpg'
+                    );
+                    if (frameResult.success && frameResult.data) {
+                        const imageBase64 = uint8ArrayToBase64(new Uint8Array(frameResult.data));
+                        dataForCloud = {
+                            base64Data: imageBase64,
+                            mimeType: 'image/jpeg', // Output of FFmpeg command
+                            fileSize: frameResult.data.byteLength
+                        };
+                    } else {
+                        throw new Error('FFmpeg failed to extract frame for alt text.');
+                    }
+                } catch (ffmpegError: any) {
+                    console.warn(`[processMediaWithUrl] FFmpeg failed for ${fileName}, trying fallback approach:`, ffmpegError.message);
+
+                    // Fallback: treat as simple media and send directly to cloud
+                    port.postMessage({ type: 'progress', message: `FFmpeg failed, sending ${fileName} directly to cloud for alt text...`, originalSrcUrl: mediaSrcUrl });
+                    const response = await fetch(mediaSrcUrl);
+                    if (!response.ok) throw new Error(`Failed to fetch ${fileName}: ${response.statusText}`);
+                    const blob = await response.blob();
+                    if (blob.size > SINGLE_FILE_DIRECT_LIMIT) {
+                        port.postMessage({ type: 'warning', message: `Media ${fileName} is large (${(blob.size / (1024 * 1024)).toFixed(1)}MB), direct cloud processing might be slow or fail.`, originalSrcUrl: mediaSrcUrl });
+                    }
+                    const arrayBuffer = await blob.arrayBuffer();
                     dataForCloud = {
-                        base64Data: imageBase64,
-                        mimeType: 'image/jpeg', // Output of FFmpeg command
-                        fileSize: frameResult.data.byteLength
+                        base64Data: uint8ArrayToBase64(new Uint8Array(arrayBuffer)),
+                        mimeType: blob.type || mediaType,
+                        fileSize: blob.size
                     };
-                } else {
-                    throw new Error('FFmpeg failed to extract frame for alt text.');
                 }
-            } else if (mediaType.startsWith('image/')) { // Direct image, fetch and convert to base64
+            } else if (mediaType.startsWith('image/')) {
+                // Direct image processing - fetch and convert to base64
                 port.postMessage({ type: 'progress', message: `Fetching ${fileName} for alt text...`, originalSrcUrl: mediaSrcUrl });
                 const response = await fetch(mediaSrcUrl);
                 if (!response.ok) throw new Error(`Failed to fetch image ${fileName}: ${response.statusText}`);
                 const blob = await response.blob();
                 if (blob.size > SINGLE_FILE_DIRECT_LIMIT) {
-                    port.postMessage({ type: 'warning', message: `Image ${fileName} is large (${(blob.size / (1024*1024)).toFixed(1)}MB), direct cloud processing might be slow or fail.`, originalSrcUrl: mediaSrcUrl });
+                    port.postMessage({ type: 'warning', message: `Image ${fileName} is large (${(blob.size / (1024 * 1024)).toFixed(1)}MB), direct cloud processing might be slow or fail.`, originalSrcUrl: mediaSrcUrl });
                 }
                 const arrayBuffer = await blob.arrayBuffer();
                 dataForCloud = {
-                    base64Data: uint8ArrayToBase64(new Uint8Array(arrayBuffer)), // Helper needed
+                    base64Data: uint8ArrayToBase64(new Uint8Array(arrayBuffer)),
                     mimeType: blob.type || mediaType,
                     fileSize: blob.size
                 };
@@ -747,3 +542,121 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
     }
     return self.btoa(binary);
 }
+
+// WXT entry point
+export default {
+    main() {
+        console.log('[Background] Service worker main() executed. Setting up listeners.');
+
+        // Start loading FFmpeg right away when the extension starts
+        console.log('[Background] Preloading FFmpeg on browser start...');
+        setupOffscreenDocument(OFFSCREEN_DOCUMENT_PATH).catch((err: Error) => {
+            console.warn("[Background] Initial FFmpeg preloading failed:", err.message);
+        });
+
+        // Listener for long-lived port connections from content scripts
+        browser.runtime.onConnect.addListener((port: any) => {
+            if (port.name === 'content-script-port') {
+                if (contentScriptPort && contentScriptPort !== port) {
+                    console.log('[Background] New content script connection, previous port will be replaced.');
+                }
+                contentScriptPort = port;
+                console.log('[Background] Content script connected via port:', port.sender?.tab?.id ? `Tab ID ${port.sender.tab.id}` : 'Unknown tab');
+
+                // When a port connects, ensure FFmpeg is loading/loaded but don't block
+                setupOffscreenDocument(OFFSCREEN_DOCUMENT_PATH).catch((err: Error) => {
+                    console.warn("[Background] Offscreen Document setup/FFmpeg load failed:", err.message);
+                    if (contentScriptPort && contentScriptPort === port) { 
+                        contentScriptPort.postMessage({ 
+                            type: 'ffmpegStatus', 
+                            status: 'FFmpeg initial setup error: ' + err.message, 
+                            error: true,
+                            firstLoadMessage: 'FFmpeg is loading. The first load can take up to 5 minutes. Future loads will be faster.'
+                        });
+                    }
+                });
+
+                port.onMessage.addListener(async (message: any) => { 
+                    let payloadSummary = "No payload or unrecognized structure";
+                    if (message.payload) {
+                        if (message.payload.indexedDbKey) {
+                             payloadSummary = `{indexedDbKey: ${message.payload.indexedDbKey}, name: ${message.payload.name}, type: ${message.payload.type}}`;
+                        } else if (message.payload.arrayBuffer instanceof ArrayBuffer) {
+                            payloadSummary = `{name: ${message.payload.name}, arrayBuffer: ArrayBuffer(size=${message.payload.arrayBuffer.byteLength})}`;
+                        } else if (message.payload.arrayBuffer) {
+                             payloadSummary = `{name: ${message.payload.name}, arrayBuffer: Non-ArrayBuffer type: ${typeof message.payload.arrayBuffer}}`;
+                        } else {
+                            payloadSummary = JSON.stringify(message.payload).substring(0, 200) + "...";
+                        }
+                    }
+                    console.log('[Background] Port message from content script:', message.type, payloadSummary);
+
+                    if (message.type === 'ping') {
+                        port.postMessage({ type: 'pong' });
+                    }
+                });
+
+                port.onDisconnect.addListener(() => {
+                    console.log('[Background] Content script port disconnected:', port.sender?.tab?.id ? `Tab ID ${port.sender.tab.id}` : 'Unknown tab');
+                    if (contentScriptPort === port) { 
+                        contentScriptPort = null;
+                        console.log('[Background] Active content script port cleared.');
+                    }
+                });
+            }
+        });
+        console.log('[Background] onConnect listener attached.');
+        
+        // Add listener for runtime messages (e.g., from content script sendMessage)
+        browser.runtime.onMessage.addListener(async (message: any, sender: any) => {
+            console.log('[Background] Received runtime message:', message.type, 'from:', sender.tab?.id);
+            
+            if (message.type === 'processLargeMediaViaSendMessage') {
+                // Handle media processing request from content script
+                const payload = message.payload;
+                if (!payload) {
+                    return { error: 'No payload provided' };
+                }
+                
+                try {
+                    // Get the content script port for sending progress updates
+                    if (!contentScriptPort) {
+                        console.error('[Background] No content script port available for sending updates');
+                        return { error: 'No active connection to content script' };
+                    }
+                    
+                    // Check if FFmpeg is ready
+                    if (!ffmpegReady) {
+                        contentScriptPort.postMessage({ 
+                            type: 'ffmpegStatus', 
+                            status: 'FFmpeg is still loading, please wait...', 
+                            loading: true,
+                            firstLoadMessage: 'FFmpeg is loading. The first load can take up to 5 minutes. Future loads will be faster.'
+                        });
+                    }
+                    
+                    // Process the media using the URL
+                    await processMediaWithUrl(
+                        payload.mediaSrcUrl,
+                        payload.fileName,
+                        payload.mediaType,
+                        payload.generationType,
+                        contentScriptPort,
+                        payload.videoMetadata
+                    );
+                    
+                    return { success: true };
+                } catch (error: any) {
+                    console.error('[Background] Error processing media:', error);
+                    return { error: error.message };
+                }
+            }
+            
+            // Return undefined for messages we don't handle
+            return undefined;
+        });
+        console.log('[Background] onMessage listener attached.');
+    },
+};
+
+console.log('[Background] Background script loaded (listeners will be set up in main when service worker executes).');
