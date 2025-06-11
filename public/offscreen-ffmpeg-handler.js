@@ -11,6 +11,49 @@ let loadPromise = null;
 // Import our new video processing module for compression operations
 let videoProcessingModule = null;
 
+// === IndexedDB Helper Functions ===
+const DB_NAME = 'MediaProcessingDB';
+const STORE_NAME = 'PendingFiles';
+const DB_VERSION = 1;
+
+async function openIndexedDB() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        request.onerror = () => {
+            console.error('[Offscreen] IndexedDB error:', request.error);
+            reject(new Error('Error opening IndexedDB: ' + request.error?.name));
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onupgradeneeded = (event) => {
+            const db = event.target.result;
+            if (!db.objectStoreNames.contains(STORE_NAME)) {
+                db.createObjectStore(STORE_NAME);
+            }
+        };
+    });
+}
+
+async function getFileFromIndexedDB(key) {
+    const db = await openIndexedDB();
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(STORE_NAME, 'readonly');
+        const store = transaction.objectStore(STORE_NAME);
+        const request = store.get(key);
+        request.onerror = () => {
+            console.error('[Offscreen] IndexedDB get error:', request.error);
+            reject(new Error('Error retrieving file: ' + request.error?.name));
+        };
+        request.onsuccess = () => resolve(request.result || null);
+        transaction.oncomplete = () => db.close();
+        transaction.onerror = () => {
+            console.error('[Offscreen] IndexedDB get transaction error:', transaction.error);
+            reject(new Error('Get transaction error: ' + transaction.error?.name));
+        };
+    });
+}
+
+// === End IndexedDB Helper Functions ===
+
 // Load video processing module dynamically
 async function loadVideoProcessingModule() {
     if (videoProcessingModule) return videoProcessingModule;
@@ -371,12 +414,48 @@ runtimeAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     // Handle new compression operations
     else if (message.type === 'compressVideo') {
-        const { operationId, fileData, fileName, mimeType, compressionSettings, fileSize } = message.payload;
-        const actualFileSize = fileSize || fileData.byteLength;
-        console.log(`[Offscreen] Processing compressVideo message for opId: ${operationId}. File: ${fileName} (${(actualFileSize / (1024 * 1024)).toFixed(1)}MB)`);
-
+        const { operationId, fileData, indexedDbKey, fileName, mimeType, compressionSettings, fileSize } = message.payload;
+        
+        console.log(`[Offscreen] Received compressVideo message:`, {
+            operationId,
+            hasFileData: !!fileData,
+            hasIndexedDbKey: !!indexedDbKey,
+            fileName,
+            mimeType,
+            fileSize: fileSize ? `${(fileSize / (1024 * 1024)).toFixed(1)}MB` : 'unknown',
+            compressionSettings
+        });
+        
         (async () => {
             try {
+                let file;
+                let actualFileSize;
+                
+                // Check if we have IndexedDB key or direct file data
+                if (indexedDbKey) {
+                    console.log(`[Offscreen] Processing compressVideo message for opId: ${operationId}. File: ${fileName} (${(fileSize / (1024 * 1024)).toFixed(1)}MB) from IndexedDB key: ${indexedDbKey}`);
+                    
+                    // Get file from IndexedDB
+                    const storedFile = await getFileFromIndexedDB(indexedDbKey);
+                    if (!storedFile) {
+                        throw new Error(`File not found in IndexedDB for key: ${indexedDbKey}`);
+                    }
+                    
+                    file = storedFile;
+                    actualFileSize = file.size;
+                    console.log(`[Offscreen] Retrieved file from IndexedDB: ${fileName} (${(actualFileSize / (1024 * 1024)).toFixed(1)}MB)`);
+                } else if (fileData) {
+                    // Legacy direct file data approach
+                    actualFileSize = fileSize || fileData.byteLength;
+                    console.log(`[Offscreen] Processing compressVideo message for opId: ${operationId}. File: ${fileName} (${(actualFileSize / (1024 * 1024)).toFixed(1)}MB) from direct data`);
+                    
+                    // Create File object from the data
+                    file = new File([fileData], fileName, { type: mimeType });
+                    console.log(`[Offscreen] Created file object: ${fileName} (${(file.size / (1024 * 1024)).toFixed(1)}MB), type: ${file.type}`);
+                } else {
+                    throw new Error('No file data or IndexedDB key provided for compression');
+                }
+
                 console.log(`[Offscreen] Starting compression for ${fileName} (${(actualFileSize / (1024 * 1024)).toFixed(1)}MB)`);
                 
                 // Load video processing module
@@ -400,11 +479,6 @@ runtimeAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     object: typeof VideoProcessing !== 'undefined' ? VideoProcessing : 'undefined'
                 });
 
-                // Create File object from the data
-                const file = new File([fileData], fileName, { type: mimeType });
-                
-                console.log(`[Offscreen] Created file object: ${fileName} (${(file.size / (1024 * 1024)).toFixed(1)}MB), type: ${file.type}`);
-                
                 // Perform compression using our module
                 // Handle different module export formats
                 let compressVideoFunc;

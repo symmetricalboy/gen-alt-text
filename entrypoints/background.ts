@@ -597,14 +597,17 @@ async function processMediaWithUrl(
                     if (hasOffscreen) {
                         try {
                             console.log(`[processMediaWithUrl] Starting offscreen compression for ${fileName}...`);
-                            const fileArrayBuffer = await file.arrayBuffer();
                             
-                            console.log(`[processMediaWithUrl] File data prepared: ${fileName} (${(fileArrayBuffer.byteLength / (1024 * 1024)).toFixed(1)}MB)`);
+                            // Store file in IndexedDB for offscreen access instead of sending large ArrayBuffer
+                            const fileKey = `compression_${Date.now()}_${fileName}`;
+                            await storeFileInDB(fileKey, file);
+                            
+                            console.log(`[processMediaWithUrl] File stored in IndexedDB: ${fileName} (${(file.size / (1024 * 1024)).toFixed(1)}MB)`);
                             
                             // Send progress update with correct file size
                             port.postMessage({ 
                                 type: 'progress', 
-                                message: `Starting compression for ${fileName} (${(fileArrayBuffer.byteLength / (1024 * 1024)).toFixed(1)}MB)`, 
+                                message: `Starting compression for ${fileName} (${(file.size / (1024 * 1024)).toFixed(1)}MB)`, 
                                 originalSrcUrl: mediaSrcUrl 
                             });
                             
@@ -615,18 +618,36 @@ async function processMediaWithUrl(
                                 originalSrcUrl: mediaSrcUrl 
                             });
                             
-                            const response = await browser.runtime.sendMessage({
-                                target: 'offscreen-ffmpeg',
-                                type: 'compressVideo',
-                                payload: {
-                                    operationId: `compress_${Date.now()}`,
-                                    fileData: fileArrayBuffer,
-                                    fileName: fileName,
-                                    mimeType: mediaType,
-                                    compressionSettings: compressionSettings,
-                                    fileSize: fileArrayBuffer.byteLength // Add explicit file size
-                                }
-                            });
+                            // Send compression request with timeout
+                            console.log(`[processMediaWithUrl] Sending compression message to offscreen document for ${fileName}...`);
+                            
+                            const response = await Promise.race([
+                                browser.runtime.sendMessage({
+                                    target: 'offscreen-ffmpeg',
+                                    type: 'compressVideo',
+                                    payload: {
+                                        operationId: `compress_${Date.now()}`,
+                                        indexedDbKey: fileKey, // Use IndexedDB key instead of fileData
+                                        fileName: fileName,
+                                        mimeType: mediaType,
+                                        compressionSettings: compressionSettings,
+                                        fileSize: file.size // Add explicit file size
+                                    }
+                                }),
+                                new Promise((_, reject) => 
+                                    setTimeout(() => reject(new Error('Compression timeout after 5 minutes')), 300000)
+                                )
+                            ]);
+                            
+                            console.log(`[processMediaWithUrl] Sent compression message to offscreen document for ${fileName}`);
+                            
+                            // Clean up IndexedDB after compression
+                            try {
+                                await deleteFileFromDB(fileKey);
+                                console.log(`[processMediaWithUrl] Cleaned up IndexedDB entry: ${fileKey}`);
+                            } catch (cleanupError) {
+                                console.warn(`[processMediaWithUrl] Failed to clean up IndexedDB entry ${fileKey}:`, cleanupError);
+                            }
                             
                             console.log(`[processMediaWithUrl] Offscreen compression response:`, response);
                             

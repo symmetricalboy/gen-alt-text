@@ -24,6 +24,6 @@ jobs:
           token: ${{ secrets.GH_PAT_FOR_DEV_REPO }}
           repository-name: symmetricalboy/gen-alt-text-dev # <-- IMPORTANT: REPLACE your-username
           branch: main # Target branch in gen-alt-text-dev
-          folder: . # Deploy the root of the current repo's dev branch
+          folder: public # Deploy only the public directory content
           clean: true # Remove existing files in the target branch
           single-commit: true # Optional: creates a single commit in the target repo

@@ -1,5 +1,5 @@
-<!DOCTYPE html><html lang="en"><head>    <meta charset="UTF-8">    <meta name="viewport" content="width=device-width, initial-scale=1.0">    <title>Bluesky Alt Text Generator</title>    <link rel="icon" href="/favicon.ico" type="image/x-icon">    <link rel="manifest" href="/manifest.json">    <meta name="theme-color" content="#208bfe">    <meta name="apple-mobile-web-app-capable" content="yes">    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">    <meta name="apple-mobile-web-app-title" content="Alt Text">    <link rel="apple-touch-icon" href="/public/icons/full-bleed-icon-128.png">    <script src="/assets/ffmpeg/ffmpeg.min.js"></script>
-    <script src="/public/video-processing-web.js"></script>
+<!DOCTYPE html><html lang="en"><head>    <meta charset="UTF-8">    <meta name="viewport" content="width=device-width, initial-scale=1.0">    <title>Bluesky Alt Text Generator</title>    <link rel="icon" href="/favicon.ico" type="image/x-icon">    <link rel="manifest" href="/manifest.json">    <meta name="theme-color" content="#208bfe">    <meta name="apple-mobile-web-app-capable" content="yes">    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">    <meta name="apple-mobile-web-app-title" content="Alt Text">    <link rel="apple-touch-icon" href="/icons/full-bleed-icon-128.png">    <script src="/assets/ffmpeg/ffmpeg.min.js"></script>
+    <script src="/video-processing-web.js"></script>
     <style>
         :root {
             --primary-color: #208bfe;
@@ -211,6 +211,7 @@
     </style>
 </head>
 <body>
+    <div id="ffmpeg-status">Loading FFmpeg...</div>
     <header>
         <h1>Bluesky Alt Text Generator</h1>
         <p class="subtitle">Automatically generate detailed, accessible alt text for your Bluesky images & videos using Google Gemini AI.</p>
@@ -638,6 +639,8 @@
                 }, 300);
             }, duration);
         }
+
+        // FFmpeg is now initialized via video-processing-web.js
     </script>
     
     <!-- Service Worker Registration -->
@@ -650,19 +653,6 @@
                 } catch (error) {
                     console.log('ServiceWorker registration failed: ', error);
                 }
-                
-                // Initialize video processing on page load
-                VideoProcessing.initializeFFmpeg().catch(err => {
-                    console.warn("FFmpeg initialization failed:", err);
-                    updateStatus('FFmpeg not available. Large video compression disabled.', false);
-                });
-            });
-        } else {
-            window.addEventListener('load', async () => {
-                VideoProcessing.initializeFFmpeg().catch(err => {
-                    console.warn("FFmpeg initialization failed:", err);
-                    updateStatus('FFmpeg not available. Large video compression disabled.', false);
-                });
             });
         }
     </script>
