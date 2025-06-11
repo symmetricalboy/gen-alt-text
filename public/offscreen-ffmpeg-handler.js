@@ -16,12 +16,38 @@ async function loadVideoProcessingModule() {
     if (videoProcessingModule) return videoProcessingModule;
     
     try {
-        // Use dynamic import to load our TypeScript module
-        videoProcessingModule = await import('../lib/video-processing.js');
-        console.log('[Offscreen] Video processing module loaded successfully');
-        return videoProcessingModule;
+        // Try to load the video processing module from the correct extension path
+        // First, try loading the web-compatible version that doesn't depend on TypeScript compilation
+        try {
+            videoProcessingModule = await import('./video-processing-web.js');
+            console.log('[Offscreen] Video processing web module loaded successfully');
+            return videoProcessingModule;
+        } catch (webError) {
+            console.warn('[Offscreen] Failed to load web module, trying alternative paths:', webError.message);
+            
+            // Fallback: try to construct the extension URL for the compiled module
+            const moduleUrl = runtimeAPI.runtime.getURL('lib/video-processing.js');
+            console.log('[Offscreen] Trying to load from extension URL:', moduleUrl);
+            
+            videoProcessingModule = await import(moduleUrl);
+            console.log('[Offscreen] Video processing module loaded successfully from extension URL');
+            return videoProcessingModule;
+        }
     } catch (error) {
         console.error('[Offscreen] Failed to load video processing module:', error);
+        console.error('[Offscreen] Available in global scope:', {
+            hasVideoProcessing: typeof VideoProcessing !== 'undefined',
+            hasWindow: typeof window !== 'undefined',
+            hasDocument: typeof document !== 'undefined'
+        });
+        
+        // Final fallback: check if VideoProcessing is available globally (from video-processing-web.js)
+        if (typeof VideoProcessing !== 'undefined') {
+            console.log('[Offscreen] Using globally available VideoProcessing object');
+            videoProcessingModule = { VideoProcessing };
+            return videoProcessingModule;
+        }
+        
         return null;
     }
 }
@@ -350,19 +376,45 @@ runtimeAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         (async () => {
             try {
+                console.log(`[Offscreen] Starting compression for ${fileName} (${(fileData.byteLength / (1024 * 1024)).toFixed(1)}MB)`);
+                
                 // Load video processing module
                 const videoModule = await loadVideoProcessingModule();
                 if (!videoModule) {
                     throw new Error('Video processing module not available');
                 }
 
+                console.log(`[Offscreen] Video module loaded:`, {
+                    hasVideoProcessing: !!videoModule.VideoProcessing,
+                    hasCompressVideo: !!videoModule.compressVideo,
+                    videoModuleKeys: Object.keys(videoModule || {})
+                });
+
                 // Create File object from the data
                 const file = new File([fileData], fileName, { type: mimeType });
                 
-                console.log(`[Offscreen] Compressing ${fileName} (${(file.size / (1024 * 1024)).toFixed(1)}MB)`);
+                console.log(`[Offscreen] Created file object: ${fileName} (${(file.size / (1024 * 1024)).toFixed(1)}MB), type: ${file.type}`);
                 
                 // Perform compression using our module
-                const result = await videoModule.compressVideo(file, compressionSettings, (progress) => {
+                // Handle different module export formats
+                let compressVideoFunc;
+                if (videoModule.VideoProcessing && videoModule.VideoProcessing.compressVideo) {
+                    // Web module format
+                    compressVideoFunc = videoModule.VideoProcessing.compressVideo;
+                    console.log('[Offscreen] Using VideoProcessing.compressVideo from web module');
+                } else if (videoModule.compressVideo) {
+                    // Direct export format
+                    compressVideoFunc = videoModule.compressVideo;
+                    console.log('[Offscreen] Using direct compressVideo export');
+                } else {
+                    console.error('[Offscreen] Available module contents:', videoModule);
+                    throw new Error('compressVideo function not found in loaded module');
+                }
+                
+                console.log('[Offscreen] Compression settings:', compressionSettings);
+                
+                const result = await compressVideoFunc(file, compressionSettings, (progress) => {
+                    console.log(`[Offscreen] Compression progress: ${progress}`);
                     // Send progress updates back to background
                     runtimeAPI.runtime.sendMessage({
                         type: 'compressionProgress',
@@ -371,9 +423,19 @@ runtimeAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     }).catch(e => console.warn('[Offscreen] Error sending progress:', e.message));
                 });
                 
-                if (result) {
+                console.log('[Offscreen] Compression result:', {
+                    hasResult: !!result,
+                    hasBlob: !!(result?.blob),
+                    originalSize: result?.originalSize,
+                    compressedSize: result?.compressedSize,
+                    compressionRatio: result?.compressionRatio
+                });
+                
+                if (result && result.blob) {
                     // Convert blob to array buffer for sending back
                     const arrayBuffer = await result.blob.arrayBuffer();
+                    
+                    console.log(`[Offscreen] Compression successful: ${(result.originalSize / (1024 * 1024)).toFixed(1)}MB → ${(result.compressedSize / (1024 * 1024)).toFixed(1)}MB (${result.compressionRatio.toFixed(1)}% reduction)`);
                     
                     sendResponse({
                         success: true,
@@ -385,6 +447,7 @@ runtimeAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
                         quality: result.quality
                     });
                 } else {
+                    console.error('[Offscreen] Compression failed - no result or no blob:', result);
                     throw new Error('Compression failed - no result returned');
                 }
             } catch (error) {

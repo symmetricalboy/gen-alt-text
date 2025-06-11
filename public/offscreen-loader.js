@@ -106,6 +106,25 @@ window.onload = function() {
 };
 
 function loadHandlerScript() {
+  // First load the video processing web module
+  loadScript('/video-processing-web.js', 'video-processing-web-script',
+    () => {
+      logStatus('Video processing web module loaded.');
+      const videoProcessingReady = typeof VideoProcessing !== 'undefined';
+      logStatus(`VideoProcessing available: ${videoProcessingReady}`);
+      
+      // Now load the handler script
+      loadActualHandlerScript();
+    },
+    (e) => {
+      logStatus(`Video processing web module failed to load: ${e}`);
+      // Continue loading handler script even if video processing fails
+      loadActualHandlerScript();
+    }
+  );
+}
+
+function loadActualHandlerScript() {
   // Now load the handler script
   loadScript('/offscreen-ffmpeg-handler.js', 'handler-script',
     () => {
@@ -116,9 +135,12 @@ function loadHandlerScript() {
       // For FFmpeg v0.11.x, we expect createFFmpeg function at self.FFmpeg.createFFmpeg
       const wrapperReady = (typeof self.FFmpeg === 'object' && self.FFmpeg !== null && typeof self.FFmpeg.createFFmpeg === 'function') ||
                           typeof self.createFFmpeg === 'function' || typeof createFFmpeg === 'function';
-      let statusMsg = `Handler loaded. Core ready: ${coreReady}. Wrapper ready: ${wrapperReady}.`;
+      const videoProcessingReady = typeof VideoProcessing !== 'undefined';
+      
+      let statusMsg = `Handler loaded. Core ready: ${coreReady}. Wrapper ready: ${wrapperReady}. VideoProcessing ready: ${videoProcessingReady}.`;
       if (!coreReady) statusMsg += ' (Core script issue!)';
       if (!wrapperReady) statusMsg += ' (Wrapper script issue!)';
+      if (!videoProcessingReady) statusMsg += ' (VideoProcessing script issue!)';
 
       logStatus(statusMsg);
 
@@ -130,6 +152,7 @@ function loadHandlerScript() {
             progress: 'scripts-loaded',
             coreReady: coreReady,
             wrapperReady: wrapperReady,
+            videoProcessingReady: videoProcessingReady,
             timestamp: new Date().toISOString()
           }
         }).catch(e => console.warn('[Offscreen HTML] Error sending scripts-loaded message:', e.message));

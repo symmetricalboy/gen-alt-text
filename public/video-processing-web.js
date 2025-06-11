@@ -15,10 +15,12 @@
             };
         }
         
-        // Web client with CDN
+        // Web client - use local assets instead of CDN
+        // This ensures we use the same v0.11.x version that the extension uses
         return {
-            coreURL: "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js",
-            version: 'v0.12.x'
+            coreURL: "/assets/ffmpeg/ffmpeg-core.js",
+            wasmURL: "/assets/ffmpeg/ffmpeg-core.wasm",
+            version: 'v0.11.x'
         };
     };
 
@@ -79,35 +81,46 @@
 
         const config = getFFmpegConfig();
         console.log(`[VideoProcessing] Initializing FFmpeg ${config.version}...`);
+        console.log('[VideoProcessing] Available global objects:', {
+            hasGlobalFFmpeg: typeof global.FFmpeg !== 'undefined',
+            hasGlobalCreateFFmpeg: typeof global.createFFmpeg !== 'undefined',
+            hasSelfFFmpeg: typeof self.FFmpeg !== 'undefined',
+            hasSelfCreateFFmpeg: typeof self.createFFmpeg !== 'undefined',
+            hasCreateFFmpeg: typeof createFFmpeg !== 'undefined',
+            hasWindow: typeof window !== 'undefined',
+            config: config
+        });
 
         try {
             if (config.version === 'v0.12.x') {
-                // FFmpeg v0.12.x (Web CDN)
-                if (!global.FFmpeg || !global.FFmpeg.FFmpeg) {
-                    throw new Error('FFmpeg v0.12.x library not loaded. Include the CDN script first.');
-                }
-                
-                ffmpeg = new global.FFmpeg.FFmpeg();
-                
-                ffmpeg.on('log', ({ type, message }) => {
-                    if (type === 'fferr') {
-                        console.error(`[FFmpeg Error]: ${message}`);
-                    }
-                });
-
-                await ffmpeg.load({ coreURL: config.coreURL });
+                // FFmpeg v0.12.x (Web CDN) - This path should not be used anymore
+                // since we're using local v0.11.x files for both extension and web
+                throw new Error('v0.12.x CDN version is deprecated. Using local v0.11.x files instead.');
                 
             } else {
                 // FFmpeg v0.11.x (Extension)
-                if (!global.createFFmpeg && !global.FFmpeg?.createFFmpeg) {
-                    throw new Error('FFmpeg v0.11.x library not loaded');
+                console.log('[VideoProcessing] Checking for v0.11.x FFmpeg functions...');
+                console.log('[VideoProcessing] Available:', {
+                    globalCreateFFmpeg: typeof global.createFFmpeg,
+                    globalFFmpegCreateFFmpeg: typeof global.FFmpeg?.createFFmpeg,
+                    selfCreateFFmpeg: typeof self.createFFmpeg,
+                    selfFFmpegCreateFFmpeg: typeof self.FFmpeg?.createFFmpeg,
+                    createFFmpeg: typeof createFFmpeg
+                });
+                
+                if (!global.createFFmpeg && !global.FFmpeg?.createFFmpeg && !self.createFFmpeg && !self.FFmpeg?.createFFmpeg && typeof createFFmpeg === 'undefined') {
+                    throw new Error('FFmpeg v0.11.x library not loaded - no createFFmpeg function found');
                 }
                 
-                const createFFmpegFunc = global.FFmpeg?.createFFmpeg || global.createFFmpeg;
+                const createFFmpegFunc = global.FFmpeg?.createFFmpeg || global.createFFmpeg || self.FFmpeg?.createFFmpeg || self.createFFmpeg || createFFmpeg;
+                console.log('[VideoProcessing] Using createFFmpeg function:', typeof createFFmpegFunc);
+                
                 ffmpeg = createFFmpegFunc({
                     log: true,
                     corePath: config.coreURL,
                 });
+                
+                console.log('[VideoProcessing] FFmpeg instance created successfully');
                 
                 ffmpeg.setLogger(({ type, message }) => {
                     if (type === 'fferr') {
@@ -141,8 +154,18 @@
             if (progressCallback) progressCallback(message);
         };
 
-        log('Initializing FFmpeg...');
-        const ffmpegInstance = await initializeFFmpeg();
+        try {
+            log(`Starting compression for ${videoFile.name} (${(videoFile.size / (1024 * 1024)).toFixed(1)}MB)`);
+            log(`Settings: codec=${codec}, quality=${quality}, maxSizeMB=${maxSizeMB}`);
+            
+            log('Initializing FFmpeg...');
+            const ffmpegInstance = await initializeFFmpeg();
+            
+            if (!ffmpegInstance) {
+                throw new Error('Failed to initialize FFmpeg instance');
+            }
+            
+            log('FFmpeg initialized successfully');
         
         const inputFileName = videoFile.name || 'input.mp4';
         const originalSize = videoFile.size;
@@ -152,11 +175,16 @@
         // Handle different FFmpeg versions
         const config = getFFmpegConfig();
         if (config.version === 'v0.12.x') {
-            // FFmpeg v0.12.x uses different API
-            await ffmpegInstance.writeFile(inputFileName, await global.FFmpeg.fetchFile(videoFile));
+            // FFmpeg v0.12.x - deprecated, should not be used
+            throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
         } else {
-            // FFmpeg v0.11.x
-            await ffmpegInstance.FS('writeFile', inputFileName, await global.fetchFile(videoFile));
+            // FFmpeg v0.11.x - use the correct fetchFile function
+            // In web context, fetchFile should be available from the global FFmpeg object
+            const fetchFileFunc = global.FFmpeg?.fetchFile || global.fetchFile;
+            if (!fetchFileFunc) {
+                throw new Error('fetchFile function not found. Make sure FFmpeg v0.11.x is loaded properly.');
+            }
+            await ffmpegInstance.FS('writeFile', inputFileName, await fetchFileFunc(videoFile));
         }
 
         try {
@@ -168,14 +196,14 @@
             log(`Running FFmpeg with codec: ${codec}, quality: ${quality}`);
             
             if (config.version === 'v0.12.x') {
-                await ffmpegInstance.exec(['-i', inputFileName, ...initialParams, outputFileName]);
+                throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
             } else {
                 await ffmpegInstance.run('-i', inputFileName, ...initialParams, outputFileName);
             }
             
             let data;
             if (config.version === 'v0.12.x') {
-                data = await ffmpegInstance.readFile(outputFileName);
+                throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
             } else {
                 data = ffmpegInstance.FS('readFile', outputFileName);
             }
@@ -189,7 +217,7 @@
                 
                 // Clean up first pass file
                 if (config.version === 'v0.12.x') {
-                    await ffmpegInstance.deleteFile(outputFileName);
+                    throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
                 } else {
                     ffmpegInstance.FS('unlink', outputFileName);
                 }
@@ -200,9 +228,7 @@
                 log('Running stronger compression...');
                 
                 if (config.version === 'v0.12.x') {
-                    await ffmpegInstance.exec(['-i', inputFileName, ...strongerParams, strongerOutputFileName]);
-                    data = await ffmpegInstance.readFile(strongerOutputFileName);
-                    await ffmpegInstance.deleteFile(strongerOutputFileName);
+                    throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
                 } else {
                     await ffmpegInstance.run('-i', inputFileName, ...strongerParams, strongerOutputFileName);
                     data = ffmpegInstance.FS('readFile', strongerOutputFileName);
@@ -214,7 +240,7 @@
             } else {
                 // Clean up initial compression file
                 if (config.version === 'v0.12.x') {
-                    await ffmpegInstance.deleteFile(outputFileName);
+                    throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
                 } else {
                     ffmpegInstance.FS('unlink', outputFileName);
                 }
@@ -239,19 +265,27 @@
             };
 
         } catch (error) {
-            log(`Compression failed: ${error}`);
-            throw new Error(`Video compression failed: ${error}`);
+            log(`Compression failed: ${error.message || error}`);
+            console.error('[VideoProcessing] Full error details:', error);
+            throw new Error(`Video compression failed: ${error.message || error}`);
         } finally {
             // Clean up input file
             try {
                 if (config.version === 'v0.12.x') {
-                    await ffmpegInstance.deleteFile(inputFileName);
+                    throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
                 } else {
                     ffmpegInstance.FS('unlink', inputFileName);
                 }
             } catch (e) {
+                log(`Cleanup warning: ${e.message || e}`);
                 // Ignore if file doesn't exist
             }
+        }
+        
+        } catch (outerError) {
+            log(`Outer compression error: ${outerError.message || outerError}`);
+            console.error('[VideoProcessing] Outer error details:', outerError);
+            throw outerError;
         }
     };
 
