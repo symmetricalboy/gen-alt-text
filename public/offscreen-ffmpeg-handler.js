@@ -113,10 +113,37 @@ async function getFFmpegInstance() {
             
             console.log('[Offscreen] Both core files are accessible, creating FFmpeg instance...');
             
+            // Try alternative configuration for v0.11.x with locateFile function
+            console.log('[Offscreen] Trying alternative configuration with locateFile function...');
+            
             const newInstance = createFFmpegFunc({
-                corePath: coreURL,
-                wasmPath: wasmURL,
-                log: true // Enable logging
+                log: true, // Enable logging
+                // Use locateFile function to resolve paths dynamically
+                locateFile: (path, scriptDirectory) => {
+                    console.log('[Offscreen] locateFile called:', { path, scriptDirectory });
+                    
+                    // Map the expected files to our extension URLs
+                    if (path === 'ffmpeg-core.wasm') {
+                        const wasmURL = runtimeAPI.runtime.getURL('assets/ffmpeg/ffmpeg-core.wasm');
+                        console.log('[Offscreen] Resolving ffmpeg-core.wasm to:', wasmURL);
+                        return wasmURL;
+                    }
+                    if (path === 'ffmpeg-core.js') {
+                        const coreURL = runtimeAPI.runtime.getURL('assets/ffmpeg/ffmpeg-core.js');
+                        console.log('[Offscreen] Resolving ffmpeg-core.js to:', coreURL);
+                        return coreURL;
+                    }
+                    if (path.includes('ffmpeg-core.worker.js')) {
+                        // Try to find worker file if it exists
+                        const workerURL = runtimeAPI.runtime.getURL('assets/ffmpeg/ffmpeg-core.worker.js');
+                        console.log('[Offscreen] Resolving worker file to:', workerURL);
+                        return workerURL;
+                    }
+                    
+                    // Fallback to default resolution
+                    console.log('[Offscreen] Using default path resolution for:', path);
+                    return scriptDirectory + path;
+                }
             });
 
             // Setup log and progress handlers for v0.11.x
