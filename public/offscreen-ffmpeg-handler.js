@@ -163,8 +163,8 @@ async function getFFmpegInstance() {
             const newInstance = createFFmpegFunc({
                 log: true, // Enable logging
                 // Disable threading to avoid blob worker issues in Chrome MV3
-                // This makes FFmpeg run in single-threaded mode which is compatible with CSP restrictions
                 mainName: 'main',
+                mt: false, // Disable multithreading to prevent blob worker creation
                 
                 // Use locateFile function to resolve paths dynamically
                 locateFile: (path, scriptDirectory) => {
@@ -387,7 +387,16 @@ runtimeAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 console.log(`[Offscreen] Video module loaded:`, {
                     hasVideoProcessing: !!videoModule.VideoProcessing,
                     hasCompressVideo: !!videoModule.compressVideo,
-                    videoModuleKeys: Object.keys(videoModule || {})
+                    videoModuleKeys: Object.keys(videoModule || {}),
+                    globalVideoProcessing: typeof VideoProcessing !== 'undefined' ? !!VideoProcessing : false,
+                    globalVideoProcessingKeys: typeof VideoProcessing !== 'undefined' ? Object.keys(VideoProcessing) : []
+                });
+                
+                // Also check global VideoProcessing object directly
+                console.log('[Offscreen] Global VideoProcessing check:', {
+                    available: typeof VideoProcessing !== 'undefined',
+                    hasCompressVideo: typeof VideoProcessing !== 'undefined' && !!VideoProcessing.compressVideo,
+                    object: typeof VideoProcessing !== 'undefined' ? VideoProcessing : 'undefined'
                 });
 
                 // Create File object from the data
@@ -406,9 +415,14 @@ runtimeAPI.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     // Direct export format
                     compressVideoFunc = videoModule.compressVideo;
                     console.log('[Offscreen] Using direct compressVideo export');
+                } else if (typeof VideoProcessing !== 'undefined' && VideoProcessing.compressVideo) {
+                    // Global VideoProcessing object format
+                    compressVideoFunc = VideoProcessing.compressVideo;
+                    console.log('[Offscreen] Using global VideoProcessing.compressVideo');
                 } else {
                     console.error('[Offscreen] Available module contents:', videoModule);
-                    throw new Error('compressVideo function not found in loaded module');
+                    console.error('[Offscreen] Global VideoProcessing:', typeof VideoProcessing !== 'undefined' ? VideoProcessing : 'undefined');
+                    throw new Error('compressVideo function not found in loaded module or global scope');
                 }
                 
                 console.log('[Offscreen] Compression settings:', compressionSettings);

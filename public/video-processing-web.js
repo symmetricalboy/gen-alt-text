@@ -26,19 +26,21 @@
 
     let ffmpeg = null;
     let isFFmpegLoaded = false;
-    const MAX_SIZE_MB = 20;
+    let isCompressing = false; // Mutex to prevent concurrent compression
+    const MAX_SIZE_MB = 10; // Smaller target size for better compression
 
-    // Codec and quality configuration
+    // Codec and quality configuration - Updated with high quality H.264 from test-chunking.html
     const getCodecParams = (codec, quality, stronger = false) => {
         const qualityMap = { low: 0, medium: 1, high: 2 };
-        const h264_crf = [30, 26, 22];
+        // Use the same CRF values from test-chunking.html
+        const h264_crf = [30, 26, 22]; // Low, Medium, High quality
         const vp8_crf = [35, 30, 25];
         const vp9_crf = [40, 35, 30];
         
         let ext = 'mp4';
         let params = [];
         let crf_value;
-        let qualityIndex = qualityMap[quality] || 1;
+        let qualityIndex = qualityMap[quality] || 2; // Default to high quality
 
         switch(codec) {
             case 'libvpx': // VP8
@@ -53,18 +55,21 @@
                 if (stronger) crf_value += 5;
                 params.push('-c:v', 'libvpx-vp9', '-crf', crf_value.toString(), '-b:v', '0', '-deadline', 'realtime', '-row-mt', '1');
                 break;
-            default: // H.264
+            default: // H.264 - Use exact settings from test-chunking.html
                 ext = 'mp4';
                 crf_value = h264_crf[qualityIndex];
                 if (stronger) crf_value += 4;
+                // Use the exact H.264 configuration from test-chunking.html
                 params.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', crf_value.toString());
                 break;
         }
         
+        // Audio and video filter settings from test-chunking.html
         params.push('-c:a', 'aac', '-b:a', '128k');
         params.push('-vf', 'scale=trunc(iw/2/2)*2:trunc(ih/2/2)*2');
         params.push('-threads', '1');
         
+        // Threading parameters from test-chunking.html
         if (codec === 'libx264') {
             params.push('-x264-params', 'threads=1:sliced-threads=0');
         }
@@ -118,6 +123,9 @@
                 ffmpeg = createFFmpegFunc({
                     log: true,
                     corePath: config.coreURL,
+                    // Disable workers to avoid blob CSP issues in Chrome MV3
+                    mainName: 'main',
+                    mt: false // Disable multithreading to avoid worker creation
                 });
                 
                 console.log('[VideoProcessing] FFmpeg instance created successfully');
@@ -143,18 +151,26 @@
 
     // Main compression function
     const compressVideo = async (videoFile, settings = {}, progressCallback) => {
-        const {
-            codec = 'libx264',
-            quality = 'medium',
-            maxSizeMB = MAX_SIZE_MB
-        } = settings;
-
-        const log = (message) => {
-            console.log(`[VideoProcessing]: ${message}`);
-            if (progressCallback) progressCallback(message);
-        };
-
+        // Check for concurrent compression
+        if (isCompressing) {
+            throw new Error('Another compression is already in progress. Please wait.');
+        }
+        
+        isCompressing = true; // Set compression mutex
+        
         try {
+            const {
+                codec = 'libx264',
+                quality = 'high', // Default to high quality like test-chunking.html
+                maxSizeMB = MAX_SIZE_MB
+            } = settings;
+
+            const log = (message) => {
+                console.log(`[VideoProcessing]: ${message}`);
+                if (progressCallback) progressCallback(message);
+            };
+
+            try {
             log(`Starting compression for ${videoFile.name} (${(videoFile.size / (1024 * 1024)).toFixed(1)}MB)`);
             log(`Settings: codec=${codec}, quality=${quality}, maxSizeMB=${maxSizeMB}`);
             
@@ -179,11 +195,34 @@
             throw new Error('v0.12.x is deprecated. Using v0.11.x instead.');
         } else {
             // FFmpeg v0.11.x - use the correct fetchFile function
-            // In web context, fetchFile should be available from the global FFmpeg object
-            const fetchFileFunc = global.FFmpeg?.fetchFile || global.fetchFile;
-            if (!fetchFileFunc) {
-                throw new Error('fetchFile function not found. Make sure FFmpeg v0.11.x is loaded properly.');
+            // In offscreen context, fetchFile should be available from various sources
+            let fetchFileFunc = null;
+            
+            // Try different sources for fetchFile
+            if (typeof global !== 'undefined') {
+                fetchFileFunc = global.FFmpeg?.fetchFile || global.fetchFile;
             }
+            if (!fetchFileFunc && typeof self !== 'undefined') {
+                fetchFileFunc = self.FFmpeg?.fetchFile || self.fetchFile;
+            }
+            if (!fetchFileFunc && typeof window !== 'undefined') {
+                fetchFileFunc = window.FFmpeg?.fetchFile || window.fetchFile;
+            }
+            if (!fetchFileFunc && typeof fetchFile !== 'undefined') {
+                fetchFileFunc = fetchFile;
+            }
+            
+            // For v0.11.x, we can also create a simple fetchFile function if needed
+            if (!fetchFileFunc) {
+                log('Creating fetchFile function for file reading...');
+                fetchFileFunc = async (file) => {
+                    if (file instanceof File || file instanceof Blob) {
+                        return new Uint8Array(await file.arrayBuffer());
+                    }
+                    throw new Error('Invalid file type for fetchFile');
+                };
+            }
+            
             await ffmpegInstance.FS('writeFile', inputFileName, await fetchFileFunc(videoFile));
         }
 
@@ -286,6 +325,9 @@
             log(`Outer compression error: ${outerError.message || outerError}`);
             console.error('[VideoProcessing] Outer error details:', outerError);
             throw outerError;
+        } finally {
+            // Always release the compression mutex
+            isCompressing = false;
         }
     };
 

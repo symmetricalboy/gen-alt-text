@@ -578,29 +578,40 @@ async function processMediaWithUrl(
                 port.postMessage({ type: 'progress', message: `Compressing ${fileName} for processing...`, originalSrcUrl: mediaSrcUrl });
                 
                 try {
-                    // Use VP9 for best compression on large files
+                    // Use H.264 high quality compression from test-chunking.html as requested by user
+                    const fileSizeMB = blob.size / (1024 * 1024);
+                    
+                    // Always use H.264 high quality (CRF 22) as requested by user
                     const compressionSettings: CompressionSettings = {
-                        codec: 'libvpx-vp9',
-                        quality: 'medium',
-                        maxSizeMB: SINGLE_FILE_DIRECT_LIMIT / (1024 * 1024)
+                        codec: 'libx264',
+                        quality: 'high', // Use high quality setting (CRF 22) from test-chunking.html
+                        maxSizeMB: 10 // Target 10MB for better upload reliability
                     };
                     
                     let compressionResult: CompressionResult | null = null;
                     
                     // Try to use offscreen document first if available
-                    if (await hasOffscreenDocument()) {
+                    const hasOffscreen = await hasOffscreenDocument();
+                    console.log(`[processMediaWithUrl] Offscreen document available: ${hasOffscreen}`);
+                    
+                    if (hasOffscreen) {
                         try {
+                            console.log(`[processMediaWithUrl] Starting offscreen compression for ${fileName}...`);
                             const fileArrayBuffer = await file.arrayBuffer();
+                            
                             const response = await browser.runtime.sendMessage({
                                 target: 'offscreen-ffmpeg',
                                 type: 'compressVideo',
                                 payload: {
+                                    operationId: `compress_${Date.now()}`,
                                     fileData: fileArrayBuffer,
                                     fileName: fileName,
                                     mimeType: mediaType,
                                     compressionSettings: compressionSettings
                                 }
                             });
+                            
+                            console.log(`[processMediaWithUrl] Offscreen compression response:`, response);
                             
                             if (response && response.success) {
                                 const compressedBlob = new Blob([response.data], { type: 'video/webm' });
@@ -612,12 +623,21 @@ async function processMediaWithUrl(
                                     codec: response.codec,
                                     quality: response.quality
                                 };
+                                console.log(`[processMediaWithUrl] Offscreen compression successful:`, {
+                                    originalSize: response.originalSize,
+                                    compressedSize: response.compressedSize,
+                                    compressionRatio: response.compressionRatio
+                                });
                             } else {
                                 console.warn('[Background] Offscreen compression failed:', response?.error);
+                                throw new Error(`Offscreen compression failed: ${response?.error || 'Unknown error'}`);
                             }
                         } catch (offscreenError: any) {
                             console.warn('[Background] Offscreen compression error:', offscreenError.message);
+                            throw offscreenError;
                         }
+                    } else {
+                        console.log(`[processMediaWithUrl] No offscreen document available, trying direct compression...`);
                     }
                     
                     // Fallback to direct compression if offscreen failed
@@ -851,6 +871,18 @@ export default {
                                'Video compression loading...',
                         error: message.payload.progress === 'error',
                         loading: message.payload.progress !== 'complete' && message.payload.progress !== 'error'
+                    });
+                }
+            }
+            
+            // Handle compression progress messages from offscreen document
+            if (message.type === 'compressionProgress') {
+                console.log('[Background] Received compression progress:', message.message);
+                if (contentScriptPort) {
+                    contentScriptPort.postMessage({
+                        type: 'progress',
+                        message: message.message,
+                        originalSrcUrl: message.originalSrcUrl || 'Unknown'
                     });
                 }
             }
