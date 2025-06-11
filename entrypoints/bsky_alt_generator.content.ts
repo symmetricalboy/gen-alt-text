@@ -1,7 +1,15 @@
 import { defineContentScript } from '#imports';
 
+// Remove CS IndexedDB helpers as per new plan
+// // --- IndexedDB Helper Functions (Content Script Side) ---
+// const CS_DB_NAME = 'CS_MediaProcessingDB'; 
+// const CS_STORE_NAME = 'CS_PendingFiles';
+// const CS_DB_VERSION = 1;
+// ... (csOpenDB, csStoreFileInDB functions removed) ...
+// // --- End IndexedDB Helper Functions (Content Script Side) ---
+
 export default defineContentScript({
-  matches: ['*://*.bsky.app/*'],
+  matches: ['*://*.bsky.app/*', '*://*.deer.social/*'],
   main() {
     if (typeof window === 'undefined' || typeof document === 'undefined') {
       console.log('[bsky_alt_generator] Not a browser environment, exiting main().');
@@ -47,7 +55,13 @@ export default defineContentScript({
           if (message.type === 'progress') {
             createToast(message.message, 'info', 5000);
           } else if (message.type === 'ffmpegStatus') {
+            // Show the standard status message
             createToast(`FFmpeg: ${message.status}`, message.error ? 'error' : 'info', message.error ? 8000 : 4000);
+            
+            // If there's a first load message, show it as a persistent notification
+            if (message.firstLoadMessage && message.loading) {
+              createToast(message.firstLoadMessage, 'persistent', 0); // Persistent toast that won't auto-dismiss
+            }
           } else if (message.type === 'warning') {
             createToast(message.message, 'warning', 7000);
           } else if (message.type === 'error') {
@@ -76,6 +90,17 @@ export default defineContentScript({
 
     let manualModeObserver: MutationObserver | null = null;
 
+    // Helper function to convert ArrayBuffer to Base64
+    function arrayBufferToBase64(buffer: ArrayBuffer): string {
+        let binary = '';
+        const bytes = new Uint8Array(buffer);
+        const len = bytes.byteLength;
+        for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return window.btoa(binary);
+    }
+
     function isEffectivelyVideo(mimeType: string | undefined | null): boolean {
       if (!mimeType) return false;
       return mimeType.startsWith('video/') ||
@@ -84,7 +109,7 @@ export default defineContentScript({
              mimeType === 'image/apng';
     }
 
-    const createToast = (message: string, type: 'info' | 'success' | 'error' | 'warning' = 'info', duration: number = 8000) => {
+    const createToast = (message: string, type: 'info' | 'success' | 'error' | 'warning' | 'persistent' = 'info', duration: number = 8000) => {
       let toastContainer = document.getElementById('gemini-toast-container');
       if (!toastContainer) {
         toastContainer = document.createElement('div');
@@ -96,21 +121,47 @@ export default defineContentScript({
         document.body.appendChild(toastContainer);
       }
 
+      // Check if we already have a persistent toast with the same message
+      if (type === 'persistent') {
+        const existingToasts = Array.from(toastContainer.children) as HTMLElement[];
+        for (const existingToast of existingToasts) {
+          if (existingToast.getAttribute('data-persistent') === 'true' && 
+              existingToast.textContent?.includes(message)) {
+            return; // Don't create duplicate persistent messages
+          }
+        }
+      }
+
       const toast = document.createElement('div');
       Object.assign(toast.style, {
         padding: '12px 16px', borderRadius: '6px', boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
-        margin: '5px', minWidth: '200px', color: '#ffffff', fontSize: '14px',
-        transition: 'all 0.3s ease'
+        margin: '5px', minWidth: '250px', color: '#ffffff', fontSize: '14px',
+        transition: 'all 0.3s ease', display: 'flex', justifyContent: 'space-between', 
+        alignItems: 'center'
       });
 
-      const colors = { success: '#208bfe', error: '#e53935', warning: '#f59f0b', info: '#007eda' };
-      toast.style.backgroundColor = colors[type] || colors.info;
-      toast.textContent = message;
+      // Special formatting for persistent messages
+      if (type === 'persistent') {
+        Object.assign(toast.style, {
+          backgroundColor: '#303f9f',
+          borderLeft: '4px solid #ff9800',
+          fontWeight: '500'
+        });
+        toast.setAttribute('data-persistent', 'true');
+      } else {
+        const colors = { success: '#208bfe', error: '#e53935', warning: '#f59f0b', info: '#007eda', persistent: '#303f9f' };
+        toast.style.backgroundColor = colors[type] || colors.info;
+      }
+
+      const messageSpan = document.createElement('span');
+      messageSpan.textContent = message;
+      messageSpan.style.flex = '1';
+      toast.appendChild(messageSpan);
 
       const closeBtn = document.createElement('span');
       closeBtn.textContent = '×';
       Object.assign(closeBtn.style, {
-         marginLeft: '8px', cursor: 'pointer', float: 'right', fontWeight: 'bold'
+        marginLeft: '8px', cursor: 'pointer', fontWeight: 'bold'
       });
       closeBtn.onclick = () => {
         if (toast.parentNode === toastContainer) toastContainer.removeChild(toast);
@@ -118,9 +169,13 @@ export default defineContentScript({
       toast.appendChild(closeBtn);
 
       toastContainer.appendChild(toast);
-      setTimeout(() => {
-        if (toast.parentNode === toastContainer) toastContainer.removeChild(toast);
-      }, duration);
+      
+      // Auto-dismiss if not persistent
+      if (type !== 'persistent' && duration > 0) {
+        setTimeout(() => {
+          if (toast.parentNode === toastContainer) toastContainer.removeChild(toast);
+        }, duration);
+      }
     };
 
     const findMediaElement = (container: Element): HTMLImageElement | HTMLVideoElement | null => {
@@ -177,75 +232,50 @@ export default defineContentScript({
       return null;
     };
 
-    const getMediaFileObject = async (mediaElement: HTMLImageElement | HTMLVideoElement): Promise<File | null> => {
+    const getMediaSourceInfo = async (mediaElement: HTMLImageElement | HTMLVideoElement): Promise<{ srcUrl: string; mediaType: string; fileName: string; fileSize?: number } | null> => {
       let src = '';
+      let mediaType = '';
+
       if (mediaElement instanceof HTMLImageElement) {
          src = mediaElement.currentSrc || mediaElement.src;
+         if (src.startsWith('data:')) {
+            mediaType = src.substring(src.indexOf(':') + 1, src.indexOf(';'));
+         } else {
+            mediaType = 'image/jpeg'; // Placeholder, refine if necessary based on actual image types or src extension
+         }
       } else if (mediaElement instanceof HTMLVideoElement) {
          const sourceEl = mediaElement.querySelector('source');
          src = sourceEl?.src || mediaElement.src;
+         mediaType = mediaElement.dataset.mimeType || sourceEl?.type || 'video/mp4'; // Removed mediaElement.type
       }
       if (!src) { createToast('Could not find media source.', 'error'); return null; }
-      console.log('[getMediaFileObject] Media source URL:', src);
+      console.log('[getMediaSourceInfo] Media source URL:', src, 'Type:', mediaType);
 
       let fileName = 'pasted_media';
       try {
         const urlObj = new URL(src);
-        fileName = urlObj.pathname.substring(urlObj.pathname.lastIndexOf('/') + 1) || fileName;
-      } catch (e) { console.warn('[getMediaFileObject] Could not parse src as URL for filename:', src, e); }
+        if (src.startsWith('blob:') || src.startsWith('data:')) {
+            fileName = mediaElement.title || (mediaElement instanceof HTMLImageElement ? mediaElement.alt : null) || `media_${Date.now()}`;
+        } else {
+            fileName = urlObj.pathname.substring(urlObj.pathname.lastIndexOf('/') + 1) || fileName;
+        }
+      } catch (e) {
+        fileName = mediaElement.title || (mediaElement instanceof HTMLImageElement ? mediaElement.alt : null) || `media_${Date.now()}`;
+        console.warn('[getMediaSourceInfo] Could not parse src as standard URL for filename, generated name:', fileName, e);
+      }
       
       // Attempt to get a file extension from the fileName if it doesn't have one
-      if (!fileName.includes('.') && mediaElement.dataset.mimeType) {
-          const probableExtension = mediaElement.dataset.mimeType.split('/')[1];
+      if (!fileName.includes('.') && mediaType) {
+          const probableExtension = mediaType.split('/')[1];
           if (probableExtension) fileName += '.' + probableExtension;
-          else fileName += '.bin'; // fallback extension
-          console.log('[getMediaFileObject] Constructed fileName from mimeType:', fileName);
       } else if (!fileName.includes('.')) {
-          console.warn('[getMediaFileObject] fileName has no extension and no mediaElement.dataset.mimeType available. Defaulting to .bin if blob type is missing.', fileName);
+          fileName += '.bin'; // fallback extension
       }
+      console.log('[getMediaSourceInfo] Determined fileName:', fileName);
 
-      try {
-        console.log('[getMediaFileObject] Fetching media from:', src);
-        const response = await fetch(src);
-        if (!response.ok) {
-            console.error(`[getMediaFileObject] Fetch failed with status ${response.status}: ${response.statusText} for URL: ${src}`);
-            createToast(`Error fetching media (status ${response.status}).`, 'error');
-            return null;
-        }
-        const blob = await response.blob();
-        console.log('[getMediaFileObject] Fetched blob. Size:', blob.size, 'Blob type from response:', blob.type);
-
-        if (blob.size > TOTAL_MEDIA_SIZE_LIMIT) {
-          createToast(`File is too large (${(blob.size / (1024*1024)).toFixed(1)}MB). Max ${TOTAL_MEDIA_SIZE_LIMIT/(1024*1024)}MB.`, 'error');
-          return null;
-        }
-        
-        let fileType = blob.type;
-        if (!fileType) {
-            console.warn('[getMediaFileObject] Blob type is missing/empty. Attempting to infer from fileName:', fileName);
-            const extension = fileName.split('.').pop()?.toLowerCase();
-            if (extension === 'jpg' || extension === 'jpeg') fileType = 'image/jpeg';
-            else if (extension === 'png') fileType = 'image/png';
-            else if (extension === 'gif') fileType = 'image/gif';
-            else if (extension === 'webp') fileType = 'image/webp';
-            else if (extension === 'mp4') fileType = 'video/mp4';
-            else if (extension === 'mov') fileType = 'video/quicktime';
-            // Add more common types as needed
-            else {
-                fileType = 'application/octet-stream'; // Generic fallback
-                console.warn('[getMediaFileObject] Could not infer type from extension, defaulting to application/octet-stream.');
-            }
-        }
-
-        const nameFromType = fileType.replace('/', '.');
-        const finalFileName = src.startsWith('data:') ? `data_url_media.${nameFromType}` : (fileName || `blob_media.${nameFromType}`);
-        console.log('[getMediaFileObject] Creating file with name:', finalFileName, 'type:', fileType);
-        return new File([blob], finalFileName, {type: fileType});
-      } catch (e) {
-        console.error('[getMediaFileObject] Error processing media source:', src, e);
-        createToast('Error processing media data.', 'error');
-        return null;
-      }
+      // We won't fetch the blob here to get its size to avoid premature data loading
+      // The size will be determined by the component that eventually fetches the URL (e.g., offscreen document)
+      return { srcUrl: src, mediaType: mediaType, fileName };
     };
 
     let activeButtonElement: HTMLButtonElement | null = null;
@@ -362,41 +392,24 @@ export default defineContentScript({
         if (!composer) { createToast('Could not find context.', 'error'); return; }
         const mediaElement = findMediaElement(mediaSearchContainer || composer);
         if (!mediaElement) { createToast('No media found.', 'error'); return; }
-        const mediaFile = await getMediaFileObject(mediaElement);
-        if (!mediaFile) return;
+        
+        const sourceInfo = await getMediaSourceInfo(mediaElement);
+        if (!sourceInfo) return;
 
-        // console.log('[ContentScript] MediaFile object to be sent:', mediaFile); // Old log
         setActiveButton(button, 'AI Alt Text...');
 
         let videoMeta = {};
         if (mediaElement instanceof HTMLVideoElement) videoMeta = getVideoMetadata(mediaElement);
 
-        function arrayBufferToBase64(buffer: ArrayBuffer): string {
-          let binary = '';
-          const bytes = new Uint8Array(buffer);
-          const len = bytes.byteLength;
-          for (let i = 0; i < len; i++) {
-            binary += String.fromCharCode(bytes[i]);
-          }
-          return btoa(binary);
-        }
-
         try {
-          const arrayBuffer = await mediaFile.arrayBuffer();
-          const base64Data = arrayBufferToBase64(arrayBuffer); // Convert to Base64
-
-          const fileDataForMessage = {
-            name: mediaFile.name,
-            type: mediaFile.type,
-            size: mediaFile.size,
-            base64Data: base64Data, // Send Base64 string
-          };
-          console.log('[ContentScript] FileDataForMessage to be sent (with base64Data):', fileDataForMessage.name, 'Base64 length:', base64Data.length);
+          // We no longer convert to ArrayBuffer or Base64 here.
+          // We send the URL to the background script.
+          console.log('[ContentScript] Sending media source URL for Alt Text:', sourceInfo.srcUrl);
 
           new Promise<string>((resolve, reject) => {
             const specificHandler = (message: any) => {
-              // Use fileDataForMessage.name for matching
-              if (message.originalFileName === fileDataForMessage.name && (message.type === 'altTextResult' || message.type === 'error')) {
+              // Ensure message matching based on a unique identifier if possible, e.g. srcUrl if it's unique enough for this context
+              if (message.originalSrcUrl === sourceInfo.srcUrl && (message.type === 'altTextResult' || message.type === 'error')) {
                 if (backgroundPort) backgroundPort.onMessage.removeListener(specificHandler);
                 resetButtonText(button, originalButtonTextContentForThisButton);
                 if (message.error) reject(new Error(message.error));
@@ -411,24 +424,53 @@ export default defineContentScript({
               return; 
             }
 
-            backgroundPort.postMessage({
-              type: 'processLargeMedia',
-              payload: {
-                name: fileDataForMessage.name,      // from fileDataForMessage
-                type: fileDataForMessage.type,      // from fileDataForMessage
-                size: fileDataForMessage.size,      // from fileDataForMessage
-                base64Data: fileDataForMessage.base64Data, // from fileDataForMessage
+            const payloadForSendMessage = {
+                mediaSrcUrl: sourceInfo.srcUrl,
+                fileName: sourceInfo.fileName,
+                mediaType: sourceInfo.mediaType,
+                // size will be determined by background/offscreen when it fetches the URL
                 generationType: 'altText',
                 videoMetadata: videoMeta
-              }
+            };
+            
+            // Use browser.runtime.sendMessage for initial data transfer
+            browser.runtime.sendMessage({
+                type: 'processLargeMediaViaSendMessage', // New message type for sendMessage
+                payload: payloadForSendMessage
+            }).then(response => {
+                if (response && response.error) {
+                    console.error('[ContentScript] Error response from background after sendMessage:', response.error);
+                    reject(new Error(response.error));
+                    resetButtonText(button, originalButtonTextContentForThisButton);
+                } else if (response && response.success) {
+                    console.log('[ContentScript] Background acknowledged receipt via sendMessage for alt text.');
+                    // Now we wait for altTextResult via the port
+                } else {
+                    // This case might indicate an issue if no specific response format is defined
+                    console.warn('[ContentScript] Unexpected response from background after sendMessage for alt text:', response);
+                }
+            }).catch(err => {
+                console.error('[ContentScript] Error sending message to background:', err);
+                reject(err);
+                resetButtonText(button, originalButtonTextContentForThisButton);
             });
+
+            // Keep listening on the port for the actual result
+            if (backgroundPort) backgroundPort.onMessage.addListener(specificHandler);
+            else { 
+              resetButtonText(button, originalButtonTextContentForThisButton);
+              reject(new Error('Background port not connected for result listening.')); 
+              return; 
+            }
+            
+            // Timeout for the overall operation (waiting for port message)
             setTimeout(() => {
-              if (backgroundPort) backgroundPort.onMessage.removeListener(specificHandler);
-              if (activeButtonElement === button) {
-                  resetButtonText(button, originalButtonTextContentForThisButton);
-              }
-              reject(new Error('Alt text generation timed out.'));
-            }, 360000);
+                if (backgroundPort) backgroundPort.onMessage.removeListener(specificHandler);
+                if (activeButtonElement === button && button) { // Check if this button is still the active one
+                    resetButtonText(button, originalButtonTextContentForThisButton);
+                }
+                reject(new Error('Alt text generation timed out.'));
+            }, 360000); // Increased timeout for alt text generation
           })
           .then(altText => {
             textarea.value = altText;
@@ -443,7 +485,7 @@ export default defineContentScript({
             createToast(error.message || 'Unknown error generating alt text', 'error');
           });
         } catch (error) {
-            console.error('[ContentScript] Error converting file to ArrayBuffer or sending:', error);
+            console.error('[ContentScript] Error converting file to ArrayBuffer or sending for alt text:', error);
             createToast('Error preparing file for processing.', 'error');
             resetButtonText(button, originalButtonTextContentForThisButton);
         }
@@ -545,18 +587,18 @@ export default defineContentScript({
     };
 
     const generateCaptions = async () => {
-        createToast('Caption generation initiated (stub).', 'info');
+        createToast('Caption generation initiated.', 'info');
         const container = document.querySelector('[data-testid="composePostView"]') || document.body;
         const videoElement = findMediaElement(container);
         if (!videoElement || !(videoElement instanceof HTMLVideoElement)) {
             createToast('No video found for captions.', 'error'); return;
         }
-        const mediaFile = await getMediaFileObject(videoElement);
-        if (!mediaFile) { createToast('Could not get video file.', 'error'); return; }
+        const sourceInfo = await getMediaSourceInfo(videoElement);
+        if (!sourceInfo) { createToast('Could not get video file info.', 'error'); return; }
 
         const button = document.getElementById(CAPTION_BUTTON_ID) as HTMLButtonElement | null;
+        const originalButtonTextContentForThisButton = button ? button.innerHTML : "Generate Captions"; // Store original text before setting active
         if(button) setActiveButton(button, 'AI Captions...');
-        const originalButtonTextContentForThisButton = button ? button.innerHTML : "Generate Captions";
 
         if (!backgroundPort) {
             createToast('Background connection error.', 'error');
@@ -564,43 +606,94 @@ export default defineContentScript({
             return;
         }
         
-        new Promise<Array<{fileName: string, vttContent: string}>>((resolve, reject) => {
-            const specificHandler = (message: any) => {
-                if (message.originalFileName === mediaFile.name && (message.type === 'captionResult' || message.type === 'error')) {
-                    if (backgroundPort) backgroundPort.onMessage.removeListener(specificHandler);
-                    if(button) resetButtonText(button, originalButtonTextContentForThisButton);
-                    if (message.error) reject(new Error(message.error));
-                    else if (message.vttResults) resolve(message.vttResults);
-                    else reject(new Error('Invalid caption response.'));
-                }
-            };
-            if (backgroundPort) backgroundPort.onMessage.addListener(specificHandler);
-            else { reject(new Error('Background port not connected.')); return; }
+        try {
+            console.log('[ContentScript] Sending media source URL for Captions:', sourceInfo.srcUrl);
+            const videoMeta = getVideoMetadata(videoElement);
 
-            backgroundPort.postMessage({
-                type: 'processLargeMedia',
-                payload: { file: mediaFile, generationType: 'captions' }
+            new Promise<Array<{fileName: string, vttContent: string}>>((resolve, reject) => {
+                const specificHandler = (message: any) => {
+                    if (message.originalSrcUrl === sourceInfo.srcUrl && (message.type === 'captionResult' || message.type === 'error')) {
+                        if (backgroundPort) backgroundPort.onMessage.removeListener(specificHandler);
+                        if(button) resetButtonText(button, originalButtonTextContentForThisButton);
+                        if (message.error) reject(new Error(message.error));
+                        else if (message.vttResults) resolve(message.vttResults);
+                        else reject(new Error('Invalid caption response.'));
+                    }
+                };
+                if (backgroundPort) backgroundPort.onMessage.addListener(specificHandler);
+                else { 
+                  if(button) resetButtonText(button, originalButtonTextContentForThisButton);
+                  reject(new Error('Background port not connected.')); 
+                  return; 
+                }
+
+                const payloadForSendMessage = {
+                    mediaSrcUrl: sourceInfo.srcUrl,
+                    fileName: sourceInfo.fileName,
+                    mediaType: sourceInfo.mediaType,
+                    // size will be determined by background/offscreen
+                    generationType: 'captions',
+                    videoMetadata: videoMeta
+                };
+
+                // Use browser.runtime.sendMessage for initial data transfer
+                browser.runtime.sendMessage({
+                    type: 'processLargeMediaViaSendMessage', // New message type
+                    payload: payloadForSendMessage
+                }).then(response => {
+                    if (response && response.error) {
+                        console.error('[ContentScript] Error response from background after sendMessage:', response.error);
+                        reject(new Error(response.error));
+                        if(button) resetButtonText(button, originalButtonTextContentForThisButton);
+                    } else if (response && response.success) {
+                        console.log('[ContentScript] Background acknowledged receipt via sendMessage for captions.');
+                        // Now we wait for captionResult via the port
+                    } else {
+                        console.warn('[ContentScript] Unexpected response from background after sendMessage for captions:', response);
+                    }
+                }).catch(err => {
+                    console.error('[ContentScript] Error sending message to background for captions:', err);
+                    reject(err);
+                    if(button) resetButtonText(button, originalButtonTextContentForThisButton);
+                });
+
+                // Keep listening on the port for the actual result
+                if (backgroundPort) backgroundPort.onMessage.addListener(specificHandler);
+                else { 
+                  if(button) resetButtonText(button, originalButtonTextContentForThisButton);
+                  reject(new Error('Background port not connected for caption result listening.')); 
+                  return; 
+                }
+
+                // Timeout for the overall operation (waiting for port message)
+                setTimeout(() => {
+                    if (backgroundPort) backgroundPort.onMessage.removeListener(specificHandler);
+                    if (activeButtonElement === button && button) { // Check if this button is still the active one
+                        resetButtonText(button, originalButtonTextContentForThisButton);
+                    }
+                    reject(new Error('Caption generation timed out.'));
+                }, 360000); // Increased timeout for caption generation
+            })
+            .then(vttResults => {
+                if (vttResults && vttResults.length > 0) {
+                    vttResults.forEach(result => downloadVTTFile(result.vttContent, result.fileName));
+                    createToast('Captions generated and downloaded!', 'success');
+                     const fileInput = document.querySelector('input[type="file"][accept=".vtt"]');
+                    if (fileInput) createToast('Please select the downloaded .vtt file(s).', 'info', 6000);
+                } else {
+                     createToast('No caption data returned.', 'warning');
+                }
+            })
+            .catch(error => {
+                console.error('Error generating captions:', error);
+                createToast(error.message, 'error');
+                if(button) resetButtonText(button, originalButtonTextContentForThisButton);
             });
-            setTimeout(() => {
-                if (backgroundPort) backgroundPort.onMessage.removeListener(specificHandler);
-                reject(new Error('Caption generation timed out.'));
-            }, 360000);
-        })
-        .then(vttResults => {
-            if (vttResults && vttResults.length > 0) {
-                vttResults.forEach(result => downloadVTTFile(result.vttContent, result.fileName));
-                createToast('Captions generated and downloaded!', 'success');
-                 const fileInput = document.querySelector('input[type="file"][accept=".vtt"]');
-                if (fileInput) createToast('Please select the downloaded .vtt file(s).', 'info', 6000);
-            } else {
-                 createToast('No caption data returned.', 'warning');
-            }
-        })
-        .catch(error => {
-            console.error('Error generating captions:', error);
-            createToast(error.message, 'error');
+        } catch (error) {
+            console.error('[ContentScript] Error converting file to ArrayBuffer or sending for captions:', error);
+            createToast('Error preparing file for caption processing.', 'error');
             if(button) resetButtonText(button, originalButtonTextContentForThisButton);
-        });
+        }
     };
     
     const downloadVTTFile = (vttContent: string, filename: string = `captions-${Date.now()}.vtt`) => {

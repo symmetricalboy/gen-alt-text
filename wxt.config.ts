@@ -48,6 +48,7 @@ export default defineConfig({
     ],
     host_permissions: [
       '*://*.bsky.app/*', // Allow interaction with Bluesky pages
+      '*://*.deer.social/*', // Allow interaction with deer.social pages
       'https://us-central1-symm-gemini.cloudfunctions.net/*', // For the cloud function
       // Remove Gemini permission:
       // 'https://generativelanguage.googleapis.com/*',
@@ -57,8 +58,7 @@ export default defineConfig({
     
     // Content Security Policy
     content_security_policy: {
-      extension_pages: "script-src 'self' 'wasm-unsafe-eval'; script-src-elem 'self' 'wasm-unsafe-eval'; object-src 'self'; worker-src 'self';",
-      // sandbox: "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval'; child-src 'self';" // if you use sandboxed pages
+      extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; worker-src 'self';"
     },
 
     // Configure background script as a service worker
@@ -71,7 +71,7 @@ export default defineConfig({
       {
         // For content scripts to access icons and potentially other assets if needed directly
         resources: ['icons/*', 'assets/ui/*'], // Example: if you have UI assets
-        matches: ['*://*.bsky.app/*']
+        matches: ['*://*.bsky.app/*', '*://*.deer.social/*']
       },
       {
         // For FFmpeg assets, making them accessible primarily to the extension itself.

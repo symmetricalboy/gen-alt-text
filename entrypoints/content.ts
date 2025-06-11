@@ -7,7 +7,7 @@ export default {
     console.log('Hello content.');
 
     // Add message listener if needed
-    browser.runtime.onMessage.addListener((message) => {
+    browser.runtime.onMessage.addListener((message: any) => {
       console.log('Content script received message:', message);
       return true;
     });

@@ -3,14 +3,11 @@
 <head>
   <meta charset="utf-8">
   <title>Offscreen FFmpeg Processor</title>
+  <!-- Load the external script instead of using inline script -->
+  <script src="/offscreen-loader.js"></script>
 </head>
 <body>
-  <!-- 
-    Load FFmpeg UMD build. It should attach FFmpeg to the global scope (self/window).
-    Paths are relative to the extension root since this is served from public.
-  -->
-  <script src="/assets/ffmpeg/ffmpeg.min.js"></script>
-  <!-- Handler script for FFmpeg logic -->
-  <script src="/offscreen-ffmpeg-handler.js"></script>
+  <!-- Scripts are now loaded dynamically via JavaScript -->
+  <div id="status">Offscreen FFmpeg Processor</div>
 </body>
 </html> 
