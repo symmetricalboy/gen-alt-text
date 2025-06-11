@@ -5,10 +5,26 @@ let ffmpeg;
 async function initializeFFmpeg() {
     console.log("[VideoProcessing] Initializing FFmpeg v0.11.x...");
     
+    // Check if SharedArrayBuffer is available
+    if (typeof SharedArrayBuffer === 'undefined') {
+        console.warn("[VideoProcessing] SharedArrayBuffer is not available. This may be due to missing security headers.");
+        console.warn("[VideoProcessing] FFmpeg may not work properly. Please ensure the site is served with:");
+        console.warn("  - Cross-Origin-Embedder-Policy: require-corp");
+        console.warn("  - Cross-Origin-Opener-Policy: same-origin");
+        
+        if (document.getElementById('ffmpeg-status')) {
+            document.getElementById('ffmpeg-status').textContent = 'FFmpeg requires additional security headers to work.';
+        }
+        
+        // Still try to initialize in case it works
+    }
+    
     if (!ffmpeg || !ffmpeg.isLoaded()) {
         ffmpeg = createFFmpeg({
             log: true,
             corePath: `${window.location.origin}/assets/ffmpeg/ffmpeg-core.js`,
+            // Try to disable threading to avoid SharedArrayBuffer requirement
+            mainName: 'main',
         });
 
         ffmpeg.setLogger(({ type, message }) => {
@@ -23,9 +39,18 @@ async function initializeFFmpeg() {
             }
         } catch (error) {
             console.error("[VideoProcessing] Failed to load FFmpeg:", error);
-            if (document.getElementById('ffmpeg-status')) {
-                document.getElementById('ffmpeg-status').textContent = 'Error loading FFmpeg.';
+            
+            let errorMessage = 'Error loading FFmpeg.';
+            if (error.message && error.message.includes('SharedArrayBuffer')) {
+                errorMessage = 'FFmpeg requires SharedArrayBuffer support. Please check browser security headers.';
             }
+            
+            if (document.getElementById('ffmpeg-status')) {
+                document.getElementById('ffmpeg-status').textContent = errorMessage;
+            }
+            
+            // Don't throw the error - let the page continue to function
+            // throw error;
         }
     }
 }

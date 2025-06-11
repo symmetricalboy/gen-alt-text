@@ -4,14 +4,14 @@ const urlsToCache = [
   '/index.html',
   '/offline.html',
   '/manifest.json',
-  '/public/icons/full-bleed-icon-16.png',
-  '/public/icons/full-bleed-icon-32.png',
-  '/public/icons/full-bleed-icon-48.png',
-  '/public/icons/full-bleed-icon-96.png',
-  '/public/icons/full-bleed-icon-128.png',
-  '/public/icons/full-bleed-icon-512.png',
-  '/public/icons/gen-alt-text.svg',
-  '/public/icons/favicon.ico'
+  '/icons/full-bleed-icon-16.png',
+  '/icons/full-bleed-icon-32.png',
+  '/icons/full-bleed-icon-48.png',
+  '/icons/full-bleed-icon-96.png',
+  '/icons/full-bleed-icon-128.png',
+  '/icons/full-bleed-icon-512.png',
+  '/icons/gen-alt-text.svg',
+  '/icons/favicon.ico'
 ];
 
 // Install event - cache assets
