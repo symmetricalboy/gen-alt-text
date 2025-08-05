@@ -1,75 +1,117 @@
-# Bluesky Alt Text Generator (Chrome/Firefox Extension & Web App)
+# Bluesky Alt Text Generator
 
-![Extension Icon](./public/icons/gen-alt-text.svg)
+![Extension Icon](./icons/gen-alt-text.svg)
 
-This browser extension helps you generate detailed, accessible alt text and captions for images and videos you add to posts on Bluesky, using Google Gemini AI.
+An intelligent, AI-powered solution for generating accessible alt text and captions for images and videos. Make the web more accessible with Google Gemini AI integration across multiple platforms.
 
-## Features
+## 🌟 Available Platforms
 
-*   **AI-Powered Generation:** Adds a ✨ button next to alt text fields on `bsky.app`. Click it to generate alt text or captions on demand.
-*   **Supports Images & Videos:** Can generate alt text and captions based on the content of both image and video uploads, including Tenor GIFs.
-*   **Toast Notifications:** Displays a confirmation message after generation, reminding you to review the text.
-*   **Privacy-Focused:** Media processing happens via a secure Google Cloud Function proxy to the Google AI API.
-*   **Web App Available:** If you don't want to install an extension, or want to generate alt text for media outside of Bluesky, you can use the [web app](https://alttext.symm.app).
+### 🌐 **Web Application** (Recommended for quick use)
+**Live at: [https://alttext.symm.app](https://alttext.symm.app)**
+- Drag-and-drop interface for images and videos
+- No installation required, works on any device
+- Advanced video compression with FFmpeg
+- Progressive Web App (PWA) with offline support
 
-## Web Application
+**Repository:** [alt-text-web](https://github.com/symmetricalboy/alt-text-web)
 
-We also offer a simple web application that you can use from any device:
+### 🧩 **Browser Extension** (Seamless Bluesky integration)
+**Available on:**
+- **Firefox:** [Mozilla Add-ons](https://addons.mozilla.org/en-US/firefox/addon/bluesky-alt-text-generator/)
+- **Chrome:** [Chrome Web Store](https://chromewebstore.google.com/detail/bdgpkmjnfildfjhpjagjibfnfpdieddp)
 
-**[https://alttext.symm.app](https://alttext.symm.app)**
+Adds a ✨ button directly to Bluesky's alt text fields for instant generation.
 
-The web app allows you to:
-- Upload images or videos (up to 10MB)
-- Generate AI-powered alt text and captions
-- Copy the results to your clipboard
+**Repository:** [alt-text-ext](https://github.com/symmetricalboy/alt-text-ext)
 
-No installation required - just visit the site and start generating accessible alt text!
+## 🏗️ Project Architecture
 
-## Installation
+This project consists of four specialized repositories working together:
 
-1.  **From Store (Recommended):**
-    *   **Firefox:** [Get it from Mozilla Add-ons](https://addons.mozilla.org/en-US/firefox/addon/bluesky-alt-text-generator/)
-    *   **Chrome/Edge:** Coming Soon to the Chrome Web Store!
-2.  **Load Unpacked (Developer):**
-    *   Clone this repository: `git clone https://github.com/symmetricalboy/gen-alt-text.git`
-    *   Install dependencies: `npm install`
-    *   Build the extension: `npm run build`
-    *   Open Chrome/Edge, go to `chrome://extensions` or `edge://extensions`.
-    *   Enable "Developer mode".
-    *   Click "Load unpacked" and select the `.output/chrome-mv3` directory.
-    *   (For Firefox, use `.output/firefox-mv2` if you are building the MV2 version, or `.output/firefox-mv3` for the MV3 version - note that the store version is MV2)
+### 📱 **[alt-text-ext](https://github.com/symmetricalboy/alt-text-ext)** - Browser Extension
+Cross-browser extension built with WXT.dev framework
+- **Features:** Seamless Bluesky integration, advanced video processing, FFmpeg compression
+- **Platforms:** Chrome, Firefox, Safari
+- **Technology:** TypeScript, Manifest V3, FFmpeg.wasm
 
-## Usage
+### 🖥️ **[alt-text-web](https://github.com/symmetricalboy/alt-text-web)** - Web Application  
+Progressive Web App for standalone use
+- **Features:** Drag-and-drop interface, real-time compression, offline support
+- **Deployment:** Railway (https://alttext.symm.app)
+- **Technology:** Vanilla JavaScript, PWA, Express.js
 
-1.  Once installed, the extension is active on `bsky.app`.
-2.  When you upload an image or video and open the alt text input field (usually by clicking "ALT" or a similar button on the media preview), you will see a ✨ button appear next to the text area.
-3.  Click this icon to generate alt text based on the media.
-4.  **Review:** Always review the generated alt text before posting! AI can make mistakes. The generated text will appear in the input field, and a toast notification will confirm success or report errors.
+### ⚙️ **[alt-text-server](https://github.com/symmetricalboy/alt-text-server)** - Backend API
+Centralized AI processing server for all clients
+- **Features:** Google Gemini integration, specialized AI instructions, large file handling
+- **Deployment:** Railway with automatic scaling
+- **Technology:** Node.js, Express, @google/genai SDK
 
-## Configuration
+### 📚 **gen-alt-text** (This Repository) - Project Hub
+Central coordination, documentation, and releases
+- **Contents:** Project assets, comprehensive documentation, release management
+- **Purpose:** Single source of truth for the entire project
 
-There are no configurable options. The extension automatically adds the generate button to relevant fields on bsky.app.
+## ✨ Key Features
 
-## Contributing
+- **🤖 AI-Powered Generation:** Advanced Google Gemini AI with specialized instructions
+- **📹 Video Processing:** Automatic compression with multiple codec support (H.264, VP8, VP9)
+- **📱 Cross-Platform:** Browser extension + web app for maximum accessibility
+- **🔒 Privacy-Focused:** Secure processing with no permanent data storage
+- **🎯 Accessibility-First:** Purpose-built for screen reader compatibility
+- **⚡ Real-time Feedback:** Live progress indicators and compression logs
 
-Contributions, bug reports, and feature requests are welcome! Please check the [issues](https://github.com/symmetricalboy/gen-alt-text/issues) page.
+## 🚀 Quick Start
 
-## License
+### For Immediate Use:
+1. **Web App:** Visit [alttext.symm.app](https://alttext.symm.app)
+2. **Extension:** Install from [Chrome](https://chromewebstore.google.com/detail/bdgpkmjnfildfjhpjagjibfnfpdieddp) or [Firefox](https://addons.mozilla.org/en-US/firefox/addon/bluesky-alt-text-generator/) stores
+
+### For Developers:
+1. **Documentation:** Complete guides in [`/docs`](./docs/)
+2. **Development:** See [Development Guide](./docs/development-guide.md)
+3. **Architecture:** Review [Technical Architecture](./docs/technical-architecture.md)
+
+## 📖 Documentation
+
+Comprehensive documentation is available in the [`/docs`](./docs/) directory:
+
+- **[📋 Current State Analysis](./docs/current-state-analysis.md)** - Project status and roadmap
+- **[🏗️ Technical Architecture](./docs/technical-architecture.md)** - System design and data flow
+- **[🧩 Browser Extension Guide](./docs/browser-extension.md)** - Extension development and deployment
+- **[⚙️ Backend Server Guide](./docs/backend-server.md)** - API documentation and deployment
+- **[👨‍💻 Development Guide](./docs/development-guide.md)** - Local setup and debugging
+- **[🛣️ Project Roadmap](./docs/roadmap.md)** - Future development plans
+
+## 📊 Project Status
+
+| Component | Version | Status | Deployment |
+|-----------|---------|--------|------------|
+| **Web App** | 1.0.0 | ✅ Production | [alttext.symm.app](https://alttext.symm.app) |
+| **Backend** | 1.0.0 | ✅ Production | Railway |
+| **Extension** | 1.0.0 dev / 0.3.1 store | ⚠️ Store Update Needed | Chrome & Firefox Stores |
+| **Documentation** | 1.0.0 | ✅ Complete | This repository |
+
+## 🔗 Links & Resources
+
+- **🌐 Live Web App:** [alttext.symm.app](https://alttext.symm.app)
+- **🧩 Chrome Extension:** [Chrome Web Store](https://chromewebstore.google.com/detail/bdgpkmjnfildfjhpjagjibfnfpdieddp)
+- **🦊 Firefox Extension:** [Mozilla Add-ons](https://addons.mozilla.org/en-US/firefox/addon/bluesky-alt-text-generator/)
+- **📱 Bluesky Profile:** [@symm.app](https://bsky.app/profile/symm.app)
+- **🐛 Issues & Support:** [GitHub Issues](https://github.com/symmetricalboy/gen-alt-text/issues)
+
+## 🤝 Contributing
+
+Contributions are welcome! This project spans multiple repositories:
+
+- **🧩 Extension issues:** [alt-text-ext issues](https://github.com/symmetricalboy/alt-text-ext/issues)
+- **🖥️ Web app issues:** [alt-text-web issues](https://github.com/symmetricalboy/alt-text-web/issues)  
+- **⚙️ Server issues:** [alt-text-server issues](https://github.com/symmetricalboy/alt-text-server/issues)
+- **📚 General/documentation:** [gen-alt-text issues](https://github.com/symmetricalboy/gen-alt-text/issues)
+
+## 📜 License
 
 This project is licensed under the MIT License - see the [LICENSE](./LICENSE) file for details.
 
-## Feedback
+---
 
-Feedback, suggestions, and assistance are welcome at [@symm.app on Bluesky](https://bsky.app/profile/symm.app). 
-
-
-I need to revise this documentation extensively, but the extension is working as expected. You can build it yourself in its entirety, by running:
-```cmd
-npm install && npx wxt build -b chrome --mv3 && npx wxt zip -b chrome --mv3 && npx wxt build -b firefox --mv2 && npx wxt zip -b firefox --mv2
-```
-
-Let me also jot this down here for future reference:
-```cmd
-cd functions && gcloud functions deploy generateAltTextProxy --gen2 --runtime=nodejs20 --trigger-http --allow-unauthenticated
-```
- 
+**Making the web more accessible, one image at a time. 🌟** 
