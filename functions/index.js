@@ -418,30 +418,36 @@ In a real implementation, we would analyze the actual video.`;
         // it's an image MIME type, BUT it's NOT one of the directly supported animated image types
         // (implying it's a frame extracted from a non-natively-animated-image video type).
         const isVideoFrame = isVideo && mimeType.startsWith('image/') && !isAnimatedImage;
+        
+        // For animated images like GIFs, treat them as video-like content for better description
+        const isAnimatedContent = isVideo && isAnimatedImage;
 
-        console.log(`Processing allowed request from origin: ${requestOrigin}, mimeType: ${mimeType} (original: ${originalMimeTypeForAltText}), data length: ${base64Data.length}, isVideo: ${isVideo}, isAnimatedImage: ${isAnimatedImage}, isVideoFrame: ${isVideoFrame}`);
+        console.log(`Processing allowed request from origin: ${requestOrigin}, mimeType: ${mimeType} (original: ${originalMimeTypeForAltText}), data length: ${base64Data.length}, isVideo: ${isVideo}, isAnimatedImage: ${isAnimatedImage}, isVideoFrame: ${isVideoFrame}, isAnimatedContent: ${isAnimatedContent}`);
         
         // Additional debugging for WebM files
         if (mimeType === 'video/webm' || originalMimeTypeForAltText.includes('webm')) {
             console.log(`WEBM DEBUG: Processing WebM file with original type: ${originalMimeTypeForAltText}, cleaned type: ${mimeType}`);
         }
 
-        // Add special handling for video frames
+        // Add special handling for video frames and animated content
         let effectiveSystemInstructions = systemInstructions;
         
         if (isVideoFrame) {
-            // Add special instructions for when we're processing a video frame instead of the full video            effectiveSystemInstructions = `${systemInstructions}\n\nIMPORTANT ADDITIONAL CONTEXT: Due to technical limitations with processing large videos, you are being provided with a representative screenshot from the video rather than the full video file. Please describe this frame as thoroughly as possible, focusing on the visual content, and make it clear that this is describing a single moment from a video rather than the complete video content. Begin your description with "A frame from a video showing..." to clarify this limitation to the user.`;
+            // Add special instructions for when we're processing a video frame instead of the full video
+            effectiveSystemInstructions = `${systemInstructions}\n\nIMPORTANT ADDITIONAL CONTEXT: Due to technical limitations with processing large videos, you are being provided with a representative screenshot from the video rather than the full video file. Please describe this frame as thoroughly as possible, focusing on the visual content, and make it clear that this is describing a single moment from a video rather than the complete video content. Begin your description with "A frame from a video showing..." to clarify this limitation to the user.`;
+        } else if (isAnimatedContent) {
+            // Add special instructions for animated images like GIFs
+            effectiveSystemInstructions = `${systemInstructions}\n\nIMPORTANT ADDITIONAL CONTEXT: You are processing an animated image (such as a GIF, animated WebP, or APNG). Please describe the complete animation sequence, including any motion, transitions, or changes that occur throughout the animation loop. Focus on describing the entire animated sequence rather than just a single frame. For example, instead of "A cat looking up", describe "An animated image showing a cat repeatedly looking up, raising its head, and then lowering it again in a continuous loop."`;
         }
 
         // --- Call Gemini API ---
         let mimeTypeForGemini = mimeType; // Start with the (cleaned) original mimeType
-        if (isVideo && isAnimatedImage) {
-            // If the client flagged it as video-like (e.g., for Bluesky posting requirements)
-            // AND it's one of our recognized animated image types (gif, animated webp, apng),
-            // let's try sending a common video MIME type to Gemini.
-            // The system instructions for animated images should still guide Gemini correctly.
-            mimeTypeForGemini = 'video/mp4'; 
-            console.log(`ALERT: For Gemini API call, overriding mimeType from "${mimeType}" to "${mimeTypeForGemini}" because isVideo=true and isAnimatedImage=true.`);
+        
+        // Handle animated images and video compatibility
+        if (isAnimatedContent) {
+            // For animated images like GIFs, keep original MIME type but ensure proper processing
+            // Gemini can handle GIFs directly, so we don't need to override the MIME type
+            console.log(`Processing animated image with original mimeType: ${mimeType}`);
         } else if (mimeType === 'video/webm') {
             // WebM files should be sent as MP4 for better Gemini compatibility
             mimeTypeForGemini = 'video/mp4';

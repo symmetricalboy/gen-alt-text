@@ -72,4 +72,94 @@ Let me also jot this down here for future reference:
 ```cmd
 cd functions && gcloud functions deploy generateAltTextProxy --gen2 --runtime=nodejs20 --trigger-http --allow-unauthenticated
 ```
- 
+
+# Alt Text Extension
+
+Browser extension for automatically generating accessible alt text for images & videos using Google Gemini AI.
+
+## Features
+
+- Automatic alt text generation for images and videos
+- Support for Chrome, Firefox, and Safari
+- Video compression for large files
+- Integration with Bluesky social media platform
+- Offline-capable with local FFmpeg processing
+
+## Development
+
+### Prerequisites
+
+- Node.js 18 or higher
+- npm or yarn
+- PowerShell (for Windows build scripts)
+
+### Setup
+
+1. Install dependencies:
+```bash
+npm install
+```
+
+2. Development mode:
+```bash
+# Chrome
+npm run dev:chrome
+
+# Firefox  
+npm run dev:firefox
+
+# Safari
+npm run dev:safari
+```
+
+3. Build for production:
+```bash
+# Build for all browsers
+npm run build
+
+# Build for specific browser
+npm run build:chrome
+npm run build:firefox
+npm run build:safari
+```
+
+### Project Structure
+
+```
+alt-text-ext/
+├── entrypoints/        # Extension entry points
+│   ├── background.ts   # Background service worker
+│   ├── content.ts      # Content scripts
+│   └── popup/          # Extension popup UI
+├── lib/                # Shared libraries
+├── public/             # Static assets
+│   ├── assets/         # FFmpeg and other assets
+│   ├── icons/          # Extension icons
+│   └── offscreen*      # Offscreen document files
+├── package.json        # Dependencies and scripts
+├── tsconfig.json       # TypeScript configuration
+└── wxt.config.ts       # WXT framework configuration
+```
+
+### Configuration
+
+The extension ID is configured in `wxt.config.ts`. Update this for your own deployment.
+
+### API Configuration
+
+The extension communicates with a cloud function for AI processing. The API endpoint is configured in the background script.
+
+## Deployment
+
+1. Build the extension:
+```bash
+npm run build:unified
+```
+
+2. The built extension will be in `.output/` directory
+
+3. Load the unpacked extension in your browser's developer mode or submit to browser stores
+
+## License
+
+[Your license here] 

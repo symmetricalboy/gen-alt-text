@@ -1,6 +1,6 @@
 {
-  "name": "bluesky-alt-text",
-  "description": "Automatically generate detailed, accessible alt text for your Bluesky images & videos using Google Gemini AI.",
+  "name": "alt-text-ext",
+  "description": "Browser extension for automatically generating accessible alt text for images & videos using Google Gemini AI.",
   "private": true,
   "version": "0.4.0",
   "type": "module",
@@ -10,10 +10,13 @@
     "dev:chrome": "wxt -b chrome",
     "dev:safari": "wxt -b safari",
     "build": "wxt build",
+    "build:firefox": "wxt build -b firefox",
+    "build:chrome": "wxt build -b chrome --mv3",
+    "build:safari": "wxt build -b safari",
     "build:unified": "wxt build -b chrome --mv3",
     "cleanup:structure": "powershell -Command \"Copy-Item -Path .output/chrome-firefox-safari-mv3/chrome-mv3/* -Destination .output/chrome-firefox-safari-mv3/ -Recurse -Force; Remove-Item -Path .output/chrome-firefox-safari-mv3/chrome-mv3 -Recurse -Force; Remove-Item -Path .output/chrome-firefox-safari-mv3/*.zip -Force -ErrorAction SilentlyContinue\"",
     "zip": "wxt zip",
-    "zip:unified": "powershell -Command \"Set-Location -Path .output/chrome-firefox-safari-mv3; Remove-Item -Path ../../.output/bluesky-alt-text-chrome-firefox-safari-mv3.zip -Force -ErrorAction SilentlyContinue; Compress-Archive -Path * -DestinationPath ../../.output/bluesky-alt-text-chrome-firefox-safari-mv3.zip -Force\"",
+    "zip:unified": "powershell -Command \"Set-Location -Path .output/chrome-firefox-safari-mv3; Remove-Item -Path ../../.output/alt-text-ext-chrome-firefox-safari-mv3.zip -Force -ErrorAction SilentlyContinue; Compress-Archive -Path * -DestinationPath ../../.output/alt-text-ext-chrome-firefox-safari-mv3.zip -Force\"",
     "package:unified": "npm run build:unified && npm run cleanup:structure && npm run zip:unified",
     "compile": "tsc --noEmit",
     "postinstall": "wxt prepare"
@@ -30,6 +33,9 @@
     "@atproto/api": "^0.15.5",
     "@ffmpeg/core": "^0.12.10",
     "@ffmpeg/ffmpeg": "^0.12.15",
+    "@playwright/mcp": "^0.0.29",
+    "@playwright/test": "^1.53.0",
+    "playwright": "^1.53.0",
     "webextension-polyfill": "^0.12.0"
   }
 }
